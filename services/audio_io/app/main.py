@@ -13,12 +13,14 @@ from .config import MicConfig
 from .mic import MicController
 from .wakeword import WakeupWord, start_wakeword_loop
 from .stt import StreamingSTT
+from .tts import TTS
 
 app = FastAPI(title="Dummy Audio IO Service")
 
 mic = MicController(MicConfig())
 wake = WakeupWord(mic)
 stt = StreamingSTT()
+tts = TTS()
 
 wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
@@ -43,9 +45,13 @@ def _on_wake_detected():
     # 3) 여기서 LLM 에이전트 호출, 로그 저장 등 추가 작업 가능
     print(f"[AudioIO] 💬 사용자의 발화: {text}")
 
-    # 4) STT가 끝난 뒤 다시 wakeword loop
-    from .wakeword import start_wakeword_loop
-    global wake_thread
+    # 3) TTS로 그대로 말해주기
+    try:
+        tts.speak(text)
+    except Exception as e:
+        print(f"[AudioIO] ❌ TTS 에러: {e}")
+
+    # 4) STT/TTS 끝나면 다시 wakeword 루프 재시작
     wake_thread = threading.Thread(
         target=start_wakeword_loop,
         args=(wake, _on_wake_detected, 0.0),
