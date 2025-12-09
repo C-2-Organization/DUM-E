@@ -97,3 +97,8 @@ secrets/
 # Backend
 ############################
 *.db
+
+############################
+# External dependencies
+############################
+ros2_ws/src/doosan-robot2

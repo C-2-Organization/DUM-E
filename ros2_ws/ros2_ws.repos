@@ -1,0 +1,4 @@
+repositories:
+  doosan-robot2:
+    type: git
+    url: https://github.com/ROKEY-SPARK/DoosanBootcampCol2.git
