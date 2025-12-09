@@ -1,0 +1,99 @@
+############################
+# ROS2 / colcon workspace
+############################
+
+# build outputs
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# colcon/ament
+.colcon*
+.ament*
+CTestTestfile.cmake
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+############################
+# Python 관련
+############################
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyd
+*.pdb
+*.egg-info/
+.eggs/
+.python-version
+.venv/
+venv/
+env/
+
+############################
+# Node / Web (혹시 나중에 UI를 확장할 경우)
+############################
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-lock.yaml
+package-lock.json
+dist/
+build/
+.out/
+.next/
+
+############################
+# IDE / OS-specific
+############################
+
+# VSCode
+.vscode/
+
+# JetBrains (CLion, PyCharm 등)
+.idea/
+*.iml
+
+# Mac / Windows
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# 기타
+*.swp
+*.swo
+*.log
+*.tmp
+*.bak
+
+############################
+# Generated docs / artifacts
+############################
+
+doc/_build/
+*.pdf
+*.aux
+*.out
+*.toc
+
+############################
+# Local config / secrets (있다면)
+############################
+
+*.env
+.env.*
+config/local_*.yaml
+secrets/
+
+############################
+# Backend
+############################
+*.db
