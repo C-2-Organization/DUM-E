@@ -1,4 +1,10 @@
 # services/audio_io/app/main.py
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]  # /home/rokey/DUM-E
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
 from fastapi import FastAPI, Response
 import threading
@@ -6,20 +12,46 @@ import threading
 from .config import MicConfig
 from .mic import MicController
 from .wakeword import WakeupWord, start_wakeword_loop
+from .stt import StreamingSTT
 
 app = FastAPI(title="Dummy Audio IO Service")
 
 mic = MicController(MicConfig())
 wake = WakeupWord(mic)
+stt = StreamingSTT()
 
 wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
 
 
 def _on_wake_detected():
+    """
+    wakeword 루프 스레드에서 호출되는 콜백.
+    여기서 STT를 동기적으로 실행하면,
+    STT 동안 wakeword는 자연스럽게 '일시정지'된 효과가 난다.
+    """
     global _last_wakeup_flag
-    print("[AudioIO] >>> WAKE WORD DETECTED!")
+    print("[AudioIO] >>> WAKE WORD DETECTED! STT 시작")
     _last_wakeup_flag = True
+
+    # 1) wakeword가 계속 마이크를 읽고 있으니 잠시 멈추고 싶다면:
+    wake.running = False  # wakeword loop 종료
+
+    # 2) STT 실행 (blocking)
+    text = stt.listen_and_transcribe()
+
+    # 3) 여기서 LLM 에이전트 호출, 로그 저장 등 추가 작업 가능
+    print(f"[AudioIO] 💬 사용자의 발화: {text}")
+
+    # 4) STT가 끝난 뒤 다시 wakeword loop
+    from .wakeword import start_wakeword_loop
+    global wake_thread
+    wake_thread = threading.Thread(
+        target=start_wakeword_loop,
+        args=(wake, _on_wake_detected, 0.0),
+        daemon=True,
+    )
+    wake_thread.start()
 
 
 @app.on_event("startup")
