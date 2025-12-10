@@ -1,0 +1,16 @@
+# dum_e_interfaces/srv/GetObjectPose.srv
+
+# 요청: 어떤 물체를 찾을지 이름으로 지정
+string object_name     # 예: "phone", "mug", "pen"
+bool use_tracking      # true 면 추적 기반, false 면 단발 인식
+
+---
+# 응답
+bool success
+string message
+
+# object pose (map, base_link, camera_link 등 frame_id 포함)
+geometry_msgs/PoseStamped pose
+
+# 인식 신뢰도 (0.0 ~ 1.0)
+float32 confidence
