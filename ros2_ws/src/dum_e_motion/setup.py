@@ -5,7 +5,7 @@ package_name = 'dum_e_motion'
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(include=[package_name, package_name + '.*']),
     data_files=[
         ('share/' + package_name + '/config', ['config/T_gripper2camera.npy']),
         ('share/ament_index/resource_index/packages',

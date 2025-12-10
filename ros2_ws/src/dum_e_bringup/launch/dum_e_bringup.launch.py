@@ -72,7 +72,6 @@ def generate_launch_description():
             "rgb_camera.color_profile": "640x480x30",
             "initial_reset": "true",
             "align_depth.enable": "true",
-            "enable_rgbd": "true",
             "pointcloud.enable": "true",
         }.items(),
     )
