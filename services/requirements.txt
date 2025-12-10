@@ -10,3 +10,5 @@ pyaudio
 numpy
 scipy
 openwakeword
+langchain-openai
+langchain-core

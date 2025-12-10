@@ -15,6 +15,8 @@ from .wakeword import WakeupWord, start_wakeword_loop
 from .stt import StreamingSTT
 from .tts import TTS
 
+from services.llm_agent.app.llm import ask_llm
+
 app = FastAPI(title="Dummy Audio IO Service")
 
 mic = MicController(MicConfig())
@@ -40,18 +42,24 @@ def _on_wake_detected():
     wake.running = False  # wakeword loop 종료
 
     # 2) STT 실행 (blocking)
-    text = stt.listen_and_transcribe()
+    user_text = stt.listen_and_transcribe()
 
-    # 3) 여기서 LLM 에이전트 호출, 로그 저장 등 추가 작업 가능
-    print(f"[AudioIO] 💬 사용자의 발화: {text}")
-
-    # 3) TTS로 그대로 말해주기
+    # 3) LLM: LangChain + OpenAI로 답변 생성
     try:
-        tts.speak(text)
+        answer = ask_llm(user_text)
+    except Exception as e:
+        print(f"[AudioIO] ❌ LLM 에러: {e}")
+        answer = "생각을 정리하는 중에 문제가 생겼어요. 잠시 후에 다시 시도해 주세요."
+
+    print(f"[AudioIO] 🧠 LLM 답변: {answer}")
+
+    # 4) TTS: 답변을 음성으로 재생
+    try:
+        tts.speak(answer)
     except Exception as e:
         print(f"[AudioIO] ❌ TTS 에러: {e}")
 
-    # 4) STT/TTS 끝나면 다시 wakeword 루프 재시작
+    # 5) STT/TTS 끝나면 다시 wakeword 루프 재시작
     wake_thread = threading.Thread(
         target=start_wakeword_loop,
         args=(wake, _on_wake_detected, 0.0),

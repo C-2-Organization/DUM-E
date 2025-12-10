@@ -1,0 +1,8 @@
+# dum_e_interfaces/srv/RunSkill.srv
+
+dum_e_interfaces/SkillCommand command
+---
+bool success
+string message
+float32 confidence
+geometry_msgs/PoseStamped final_pose
