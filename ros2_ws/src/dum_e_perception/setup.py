@@ -1,19 +1,16 @@
-import os
-from glob import glob
 from setuptools import find_packages, setup
 
-package_name = 'perception'
+package_name = 'dum_e_perception'
 
 setup(
     name=package_name,
     version='0.0.0',
     packages=find_packages(exclude=['test']),
     data_files=[
+        ('share/' + package_name + '/models', ['models/yolov8s-worldv2.pt']),
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'config'),
-         glob('config/*.npy')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,9 +25,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'manual_designation = perception.manual_designation:main',
-            'pick = perception.pick:main',
-            'vision_stream = perception.vision_stream:main',
+            'perception_test = dum_e_perception.perception_node:test',
+            'perception_node = dum_e_perception.perception_node:main',
         ],
     },
 )
