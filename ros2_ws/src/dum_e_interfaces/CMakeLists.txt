@@ -16,6 +16,8 @@ find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetObjectPose.srv"
+  "srv/RunSkill.srv"
+  "msg/SkillCommand.msg"
   DEPENDENCIES geometry_msgs
 )
 
