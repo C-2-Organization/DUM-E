@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'utils'
+package_name = 'dum_e_utils'
 
 setup(
     name=package_name,
@@ -24,9 +24,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'open_gripper = utils.gripper_controller:open_gripper',
-            'close_gripper = utils.gripper_controller:close_gripper',
-            'gripper_test = utils.gripper_controller:main',
+            'open_gripper = dum_e_utils.gripper_controller:open_gripper',
+            'close_gripper = dum_e_utils.gripper_controller:close_gripper',
+            'gripper_test = dum_e_utils.gripper_controller:main',
         ],
     },
 )
