@@ -29,6 +29,8 @@ setup(
     entry_points={
         'console_scripts': [
             'manual_designation = perception.manual_designation:main',
+            'pick = perception.pick:main',
+            'vision_stream = perception.vision_stream:main',
         ],
     },
 )
