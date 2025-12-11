@@ -11,6 +11,60 @@ from dum_e_motion.motion_context import MotionContext
 PICK_CONF_TH = 0.3  # perception에서 넘어온 confidence가 이보다 낮으면 pick 안 함
 GRIPPER_OFFSET = 205
 
+# ------------------------------------------------------------------
+# Doosan + RG2 pick 모션
+# ------------------------------------------------------------------
+def execute_pick_motion(ctx: MotionContext, x, y, z):
+    """
+    접근 → 잡기 → 홈
+    """
+    from DSR_ROBOT2 import (
+        movej,
+        movel,
+        wait,
+        DR_MV_MOD_ABS,
+        DR_MV_RA_DUPLICATE,
+        get_current_posx,
+    )
+    from DR_common2 import posx
+
+    ctx.node.get_logger().info(
+        f"[MOVE] Pick → base({x:.3f}, {y:.3f}, {z:.3f})"
+    )
+
+    current_pos = get_current_posx()[0]
+
+    approach_pos = posx([
+        x,
+        y,
+        z,
+        current_pos[3],
+        current_pos[4],
+        current_pos[5],
+    ])
+
+    # 접근
+    movel(
+        approach_pos,
+        vel=ctx.LIN_VEL,
+        acc=ctx.LIN_ACC,
+        mod=DR_MV_MOD_ABS,
+        ra=DR_MV_RA_DUPLICATE,
+    )
+
+    # 집기
+    ctx.gripper.close_gripper()
+    wait(1)
+
+    # 홈으로
+    movej(
+        ctx.CUSTOM_HOME_JOINT,
+        vel=ctx.JNT_VEL,
+        acc=ctx.JNT_ACC,
+        mod=DR_MV_MOD_ABS,
+        ra=DR_MV_RA_DUPLICATE,
+    )
+
 
 def run_pick_skill(
     cmd: SkillCommand,
@@ -116,7 +170,7 @@ def run_pick_skill(
 
     # 3) 실제 모션 수행
     try:
-        ctx.execute_pick_motion(bx, by, bz)
+        execute_pick_motion(ctx, bx, by, bz)
         success = True
         message = "OK"
     except Exception as e:

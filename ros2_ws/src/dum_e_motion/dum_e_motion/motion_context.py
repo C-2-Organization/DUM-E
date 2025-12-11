@@ -104,60 +104,6 @@ class MotionContext:
         return coord_base[:3]
 
     # ------------------------------------------------------------------
-    # Doosan + RG2 pick 모션
-    # ------------------------------------------------------------------
-    def execute_pick_motion(self, x, y, z):
-        """
-        접근 → 잡기 → 홈
-        """
-        from DSR_ROBOT2 import (
-            movej,
-            movel,
-            wait,
-            DR_MV_MOD_ABS,
-            DR_MV_RA_DUPLICATE,
-            get_current_posx,
-        )
-        from DR_common2 import posx
-
-        self.node.get_logger().info(
-            f"[MOVE] Pick → base({x:.3f}, {y:.3f}, {z:.3f})"
-        )
-
-        current_pos = get_current_posx()[0]
-
-        approach_pos = posx([
-            x,
-            y,
-            z,
-            current_pos[3],
-            current_pos[4],
-            current_pos[5],
-        ])
-
-        # 접근
-        movel(
-            approach_pos,
-            vel=self.LIN_VEL,
-            acc=self.LIN_ACC,
-            mod=DR_MV_MOD_ABS,
-            ra=DR_MV_RA_DUPLICATE,
-        )
-
-        # 집기
-        self.gripper.close_gripper()
-        wait(1)
-
-        # 홈으로
-        movej(
-            self.CUSTOM_HOME_JOINT,
-            vel=self.JNT_VEL,
-            acc=self.JNT_ACC,
-            mod=DR_MV_MOD_ABS,
-            ra=DR_MV_RA_DUPLICATE,
-        )
-
-    # ------------------------------------------------------------------
     # final_pose 생성 헬퍼
     # ------------------------------------------------------------------
     def make_final_pose(self, x: float, y: float, z: float) -> PoseStamped:
