@@ -25,9 +25,9 @@ class StreamingSTT:
         self,
         samplerate: int = 16000,
         chunk_duration: float = 0.5,   # 한 번에 0.5초씩 읽기
-        silence_sec: float = 3.0,      # 5초 이상 조용하면 종료
+        silence_sec: float = 2.0,      # 2초 이상 조용하면 종료
         max_total_sec: float = 60.0,   # 안전장치: 최대 60초까지만 듣기
-        energy_threshold: float = 500, # 이 값 이상이면 '사람이 말하는 중'이라고 간주
+        energy_threshold: float = 300, # 이 값 이상이면 '사람이 말하는 중'이라고 간주
     ):
         api_key = get_env("OPENAI_API_KEY")
         self.client = OpenAI(api_key=api_key)
@@ -41,7 +41,7 @@ class StreamingSTT:
         """
         sounddevice로 마이크를 조금씩 읽으면서
         - 최초로 음성이 감지될 때까지 기다렸다가
-        - 그 이후로 5초 이상 조용하면 종료
+        - 그 이후로 2초 이상 조용하면 종료
         """
         print("[STT] 🎙 녹음을 시작합니다. 말이 끊기면 자동으로 종료됩니다.")
         num_samples_per_chunk = int(self.samplerate * self.chunk_duration)
@@ -61,6 +61,7 @@ class StreamingSTT:
             sd.wait()
 
             block_energy = float(np.abs(audio_block).mean())
+            print(block_energy)
 
             chunks.append(audio_block.copy())
 
@@ -84,7 +85,7 @@ class StreamingSTT:
     def listen_and_transcribe(self) -> str:
         """
         - 마이크에서 streaming으로 음성을 받다가
-        - 5초 이상 무음 구간이 나오면 종료
+        - 2초 이상 무음 구간이 나오면 종료
         - Whisper로 전송 후 텍스트 반환
         """
         audio_all = self._record_until_silence()
