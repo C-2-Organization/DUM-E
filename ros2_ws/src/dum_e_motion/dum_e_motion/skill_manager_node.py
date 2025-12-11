@@ -16,7 +16,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext
-from dum_e_motion.skills import pick
+from dum_e_motion.skills import pick, find
 
 ROBOT_ID = "dsr01"
 
@@ -90,8 +90,20 @@ class SkillManagerNode(Node):
             response.final_pose = final_pose
             return response
 
-        # 새로운 스킬 추가시 분기 추가
-        # elif cmd.skill_type == SkillCommand.PLACE:
+        elif cmd.skill_type == SkillCommand.FIND:
+            self.get_logger().info(
+                f"🔔 RunSkill 요청: FIND, object_name='{cmd.object_name}'"
+            )
+
+            success, message, confidence, final_pose = find.run_find_skill(
+                cmd, self.ctx
+            )
+
+            response.success = success
+            response.message = message
+            response.confidence = confidence
+            response.final_pose = final_pose
+            return response
 
         else:
             msg = f"skill_type={cmd.skill_type} 은(는) 아직 구현되지 않았습니다."

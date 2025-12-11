@@ -43,7 +43,7 @@ class MotionContext:
         client = tmp_node.create_client(GetObjectPose, "get_object_pose")
 
         self.node.get_logger().info(
-            f"[PICK] Waiting for /get_object_pose service (object='{object_name}')..."
+            f"Waiting for /get_object_pose service (object='{object_name}')..."
         )
         if not client.wait_for_service(timeout_sec=5.0):
             self.node.get_logger().error("❌ /get_object_pose 서비스가 준비되지 않았습니다. (timeout)")
