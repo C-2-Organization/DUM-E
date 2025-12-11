@@ -86,14 +86,14 @@ def _execute_plan(plan: dict) -> bool:
     return executed_any
 
 
-def _on_wake_detected():
+def _on_wake_detected(keyword: str):
     """
     wakeword 루프 스레드에서 호출되는 콜백.
     여기서 STT를 동기적으로 실행하고,
     플래너 → ROS 실행까지 처리한다.
     """
     global _last_wakeup_flag, wake_thread
-    print("[AudioIO] >>> WAKE WORD DETECTED! STT 시작")
+    print(f"[AudioIO] >>> WAKE WORD DETECTED! ({keyword}) STT 시작")
     _last_wakeup_flag = True
 
     # wakeword loop 종료 (STT/로봇 동작 동안은 잠시 쉬게)
