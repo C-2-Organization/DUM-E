@@ -108,7 +108,7 @@ class MotionContext:
     # ------------------------------------------------------------------
     def execute_pick_motion(self, x, y, z):
         """
-        접근 → 잡기 → 홈 → 놓기
+        접근 → 잡기 → 홈
         """
         from DSR_ROBOT2 import (
             movej,
@@ -129,7 +129,7 @@ class MotionContext:
         approach_pos = posx([
             x,
             y,
-            z + 205.0,  # 위에서 접근
+            z,
             current_pos[3],
             current_pos[4],
             current_pos[5],
@@ -156,10 +156,6 @@ class MotionContext:
             mod=DR_MV_MOD_ABS,
             ra=DR_MV_RA_DUPLICATE,
         )
-
-        # 놓기
-        self.gripper.open_gripper()
-        wait(1)
 
     # ------------------------------------------------------------------
     # final_pose 생성 헬퍼
