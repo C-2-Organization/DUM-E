@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 import subprocess
+import random
+import time
 
 ROOT = Path(__file__).resolve().parents[3]  # /home/rokey/DUM-E
 if str(ROOT) not in sys.path:
@@ -31,6 +33,42 @@ wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
 
 _robot_proc: subprocess.Popen | None = None
+
+WAKE_RESPONSES = [
+    "Yes, sir?",
+    "At your service, sir.",
+    "How can I assist, sir?",
+    "I'm listening, sir.",
+    "Ready when you are.",
+    "Standing by, sir.",
+    "Go ahead, sir.",
+    "Online and awaiting orders.",
+    "Here, sir.",
+    "What do you need, sir?",
+]
+
+COMMAND_ACK_RESPONSES = [
+    "Understood, sir. Executing now.",
+    "Right away, sir.",
+    "As you command, sir.",
+    "Consider it done.",
+    "On your order, sir.",
+    "Initializing protocol, sir.",
+    "Affirmative. Processing.",
+    "Certainly, sir. Handling it now.",
+    "Your wish is my command.",
+    "Acknowledged. Beginning operation.",
+    "At your service, sir.",
+    "Execution confirmed.",
+    "Working on it immediately.",
+    "Standing by, action engaged.",
+    "Task received. Proceeding.",
+    "Always, sir.",
+    "Directive accepted. Moving forward.",
+    "Command priority elevated. Executing.",
+    "Very well, sir. Activating sequence.",
+    "All systems aligned. Carrying out your request.",
+]
 
 def _is_robot_wakeup_command(text: str) -> bool:
     """
@@ -159,6 +197,14 @@ def _on_wake_detected(keyword: str):
     # wakeword loop 종료 (STT/로봇 동작 동안은 잠시 쉬게)
     wake.running = False
 
+    try:
+        wake_msg = random.choice(WAKE_RESPONSES)
+        print(f"[AudioIO] 💬 Wake response: {wake_msg}")
+        tts.speak(wake_msg)
+        time.sleep(1.0)
+    except Exception as e:
+        print(f"[AudioIO] ❌ TTS 에러 (wake response): {e}")
+
     # 1) STT 실행 (blocking)
     user_text = stt.listen_and_transcribe()
     print(f"[AudioIO] 🎙 사용자가 말한 내용: '{user_text}'")
@@ -173,6 +219,11 @@ def _on_wake_detected(keyword: str):
         )
         wake_thread.start()
         return
+
+    ack_msg = random.choice(COMMAND_ACK_RESPONSES)
+    print(f"[AudioIO] 💬 Command ack: {ack_msg}")
+    tts.speak(ack_msg)
+    time.sleep(1.0)
 
     # 로봇 깨우기 전용 명령인지 먼저 체크
     if _is_robot_wakeup_command(user_text):
