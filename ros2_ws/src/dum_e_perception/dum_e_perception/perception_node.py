@@ -17,7 +17,7 @@ class PerceptionNode(Node):
 
         # 1) Get model path
         share_dir = get_package_share_directory("dum_e_perception")
-        model_path = os.path.join(share_dir, "models", "yolov8s-worldv2.pt")
+        model_path = os.path.join(share_dir, "models", "yolov8m-worldv2.pt")
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"YOLO model not found: {model_path}")
@@ -62,7 +62,7 @@ class PerceptionNode(Node):
             return response
 
         # YOLO 탐색
-        detections = self.detector.detect(color)
+        detections = self.detector.detect(color, classes=[object_name], conf_threshold=0.15)
         candidates = [d for d in detections if d["class_name"] == object_name]
 
         if len(candidates) == 0:
