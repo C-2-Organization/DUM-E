@@ -1,6 +1,7 @@
 # services/audio_io/app/main.py
 import sys
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[3]  # /home/rokey/DUM-E
 if str(ROOT) not in sys.path:
@@ -29,6 +30,65 @@ tts = TTS()
 wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
 
+_robot_proc: subprocess.Popen | None = None
+
+def _is_robot_wakeup_command(text: str) -> bool:
+    """
+    STT 결과가 '로봇 깨워', 'wakeup robot' 같은 로봇 기동 명령인지 판별.
+    너무 복잡하게 가지 말고, 자주 쓸 패턴만 단순 매칭.
+    """
+    t = text.strip().lower()
+    if not t:
+        return False
+
+    # 영어 패턴
+    if "wakeup robot" in t or "wake up robot" in t:
+        return True
+    if "wakeup dummy" in t or "wake up dummy" in t:
+        return True
+
+    # 한국어 패턴 (필요하면 여기 계속 추가하면 됨)
+    # 예: "로봇 깨워", "로봇 좀 깨워줘", "로봇 켜", "더미 깨워"
+    if "로봇" in t and ("깨워" in t or "켜" in t):
+        return True
+    if "더미" in t and ("깨워" in t or "켜" in t):
+        return True
+
+    return False
+
+def _is_robot_already_running() -> bool:
+    """
+    이미 ros2 launch가 떠 있는지 간단히 체크.
+    """
+    global _robot_proc
+    return _robot_proc is not None and _robot_proc.poll() is None
+
+def _launch_robot_bringup() -> bool:
+    """
+    ros2 launch dum_e_bringup dum_e_bringup.launch.py 를 백그라운드로 실행.
+    성공적으로 프로세스를 띄우면 True, 실패하면 False.
+    """
+    global _robot_proc
+
+    if _is_robot_already_running():
+        print("[AudioIO] 🤖 로봇 bringup 이 이미 실행 중인 것 같아요.")
+        return False
+
+    cmd = ["ros2", "launch", "dum_e_bringup", "dum_e_bringup.launch.py"]
+    print(f"[AudioIO] 🚀 로봇 bringup 실행: {' '.join(cmd)}")
+
+    try:
+        # stdout/stderr는 필요하면 로그 파일로 돌려도 됨
+        _robot_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return True
+    except Exception as e:
+        print(f"[AudioIO] ❌ ros2 launch 실행 실패: {e}")
+        _robot_proc = None
+        return False
 
 def _execute_plan(plan: dict) -> bool:
     """
@@ -114,13 +174,40 @@ def _on_wake_detected(keyword: str):
         wake_thread.start()
         return
 
+    # 로봇 깨우기 전용 명령인지 먼저 체크
+    if _is_robot_wakeup_command(user_text):
+        print("[AudioIO] 🤖 로봇 깨우기 명령으로 인식됨")
+
+        started = _launch_robot_bringup()
+        try:
+            if started:
+                # 로봇이 꺼져 있었다 → 새로 켜는 중
+                tts.speak("Waking up dummy")
+            else:
+                # 이미 켜져 있거나 실행 실패
+                if _is_robot_already_running():
+                    tts.speak("Dummy is already running.")
+                else:
+                    tts.speak("There was a problem waking up dummy. Please try again later.")
+        except Exception as e:
+            print(f"[AudioIO] ❌ TTS 에러: {e}")
+
+        # 다시 wakeword 루프 재시작
+        wake_thread = threading.Thread(
+            target=start_wakeword_loop,
+            args=(wake, _on_wake_detected, 0.0),
+            daemon=True,
+        )
+        wake_thread.start()
+        return
+
     # 2) Planner 호출: 자연어 → 스킬 플로우(JSON)
     try:
         plan = plan_skill_flow(user_text)
     except Exception as e:
         print(f"[AudioIO] ❌ Planner 에러: {e}")
         try:
-            tts.speak("생각을 정리하는 중에 문제가 생겼어요. 잠시 후에 다시 시도해 주세요.")
+            tts.speak("I'm having a trouble while I'm organizing the process. Please try again later, sir.")
         except Exception as tts_err:
             print(f"[AudioIO] ❌ TTS 에러: {tts_err}")
 
@@ -141,8 +228,8 @@ def _on_wake_detected(keyword: str):
 
     if not can_execute:
         # 3-A) 현재 스킬셋으로는 수행 불가능한 명령
-        msg = user_message or "현재 이 명령은 수행할 수 없습니다."
-        print(f"[AudioIO] ❌ 실행 불가: {msg}")
+        msg = user_message or "Process execution failed."
+        print(f"[AudioIO] ❌ Process execution failed: {msg}")
 
         try:
             tts.speak(msg)
@@ -158,7 +245,7 @@ def _on_wake_detected(keyword: str):
             # 우리가 실제로 지원하는 스킬이 없거나 실행 실패한 경우
             fallback_msg = (
                 user_message
-                or "아직 이 명령을 완전히 실행할 수 있는 스킬이 구현되어 있지 않습니다."
+                or "Process execution failed."
             )
             print(f"[AudioIO] ⚠ 계획은 가능하다고 했지만 실제 실행 실패: {fallback_msg}")
             try:
