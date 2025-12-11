@@ -78,47 +78,92 @@ Important Rules:
   "user_message": string
 }
 
-3. The currently implemented skill is as follows:
-   - "PICK": Picks up a specific object from a table.
+3. The currently implemented skills are as follows:
+   - "PICK": Picks up a specific object from a table (the robot must already see the object with its camera).
+     - Typical usage examples:
+       - "Grab the scissors", "Pick up the scissors", "가위 잡아", "가위를 집어줘"
      - Required parameters:
-       - object.raw: The name of the object spoken by the user (e.g., "scissors")
+       - object.raw: The name of the object spoken by the user (e.g., "scissors", "가위")
        - object.canonical_en: The English name to pass to the recognition model (e.g., "scissors")
-     - params is left blank for now: {}
+     - params:
+       - For now, usually an empty object: {}
+
+   - "FIND": Searches for the specified object by moving the robot to scan the surroundings until the object is detected or a timeout occurs.
+     - This skill does NOT pick up the object. It only moves the robot/camera to a pose where the object can be detected.
+     - Typical usage examples:
+       - "Find the scissors", "Look around and find the yellow ball", "가위 찾아줘"
+       - As a sub-step before PICK when the initial detection may fail:
+         - e.g., ideal flow: FIND("scissors") → PICK("scissors")
+     - Required parameters:
+       - object.raw: The name of the object spoken by the user.
+       - object.canonical_en: The English normalized name (for detection).
+     - params:
+       - Optional numeric parameters to control search behavior, e.g.:
+         - "max_search_time": maximum search time in seconds (float, default ~10.0)
+         - "scan_interval": how often to move and rescan in seconds (float, default ~1.0)
+       - If the user does not specify them, you can leave params as an empty object {}.
+
+   - These two skills ("PICK" and "FIND") are implemented and can be used directly.
+     - Any flow that uses ONLY "PICK" and/or "FIND" can set can_execute_now = true.
 
 4. Other skill names (e.g., "OPEN_DRAWER", "PLACE", "PLACE_IN_DRAWER", "MOVE_TO_LOCATION")
 have not yet been implemented, but you are free to use them when designing your "ideal flow."
-   - However, if any of these skills are included, can_execute_now must be false.
+   - However, if any of these non-implemented skills are included, can_execute_now must be false.
    - In this case, please specify which skills are needed and why in the missing_skills field.
 
 5. Open vocabulary object:
    - object.raw transcribes the user's exact words (e.g., "가위", "노란 공", "초록색 컵").
-   - object.canonical_en은 영어로 된 간단한 객체 이름으로 변환합니다. (예: "scissors", "yellow ball", "green cup")
-   - Use common English words as possible so that the perception model can recognize them.
-   - If you're unsure of the proper English word, you can write raw in English alphabets or leave it null.
+   - object.canonical_en is a simple English object name (e.g., "scissors", "yellow ball", "green cup").
+   - Use common English words as much as possible so that the perception model can recognize them.
+   - If you're unsure of the proper English word, you can write raw in English alphabets or leave canonical_en null.
 
 6. If the command is too vague or not fully supported by the current skill set:
    - can_execute_now: false
    - steps: You can design the ideal flow, or leave it as an empty list.
    - Suggest the skills needed in missing_skills.
-   - In user_message, be honest and explain, such as "This command cannot be executed. You cannot do XXX with the currently implemented skills." Also, indicate the required skills.
+   - In user_message, be honest and explain, such as:
+     - "This command cannot be executed. You cannot do XXX with the currently implemented skills."
+     - Also indicate which additional skills would be required.
 
 7. Examples of simple commands:
-   - "Grab the scissors," "Pick up the scissors," "Pick up the scissors on the desk," "가위 잡아," "가위를 집어줘" etc. can all be handled with a single PICK command.
+   - "Grab the scissors," "Pick up the scissors," "Pick up the scissors on the desk," "가위 잡아," "가위를 집어줘" etc.
+     - These can generally be handled with a single PICK command.
      - can_execute_now: true
-     - steps: [ PICK + object_name ]
+     - steps: [ { skill: "PICK", object: {...}, params: {} } ]
+     - missing_skills: []
+
+   - "Find the scissors", "가위 찾아줘":
+     - These should generally be handled with a single FIND command.
+     - can_execute_now: true
+     - steps: [ { skill: "FIND", object: {...}, params: {} } ]
      - missing_skills: []
 
 8. Examples of compound commands:
+   - "Find the scissors and then pick them up", "가위를 찾아서 잡아줘":
+     - A reasonable flow is:
+       1) FIND "scissors"
+       2) PICK "scissors"
+     - can_execute_now: true (because both FIND and PICK are implemented)
+     - missing_skills: []
+
    - "Put the scissors in the drawer":
      - Ideal steps example:
        1) OPEN_DRAWER
        2) PICK "scissors"
        3) PLACE_IN_DRAWER "scissors"
        4) CLOSE_DRAWER
-     - However, currently only PICK is implemented:
+     - However, currently ONLY PICK and FIND are implemented:
        - can_execute_now: false
-       - missing_skills: OPEN_DRAWER, PLACE_IN_DRAWER, CLOSE_DRAWER, etc
-       - Explain which skill is required in user_message
+       - missing_skills: OPEN_DRAWER, PLACE_IN_DRAWER, CLOSE_DRAWER, etc.
+       - Explain which skill is required in user_message.
+
+9. Error handling / re-planning hint:
+   - At runtime, the robot may fail to pick an object because it cannot be detected in the current view.
+   - In such cases, a typical recovery flow is:
+     - First try PICK once.
+     - If the perception/detection fails (no object found), then run FIND for that object, and then try PICK again.
+   - When the user explicitly asks for "find and grab", you should design the flow as:
+     - [ FIND, PICK ] for the same object.
 
 Be sure to follow this format and do not output any text other than JSON.
 """

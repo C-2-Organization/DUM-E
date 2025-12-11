@@ -16,8 +16,8 @@ FIND_CONF_TH = 0.3
 SCAN_STEP_DEG = 15.0
 SCAN_MAX_DEG = 60.0
 
-JNT_VEL = 10.0
-JNT_ACC = 10.0
+JNT_VEL = 20.0
+JNT_ACC = 120.0
 
 def execute_find_scan_step(ctx: MotionContext, step_idx: int):
     """

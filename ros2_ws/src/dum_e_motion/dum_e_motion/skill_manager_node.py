@@ -80,14 +80,66 @@ class SkillManagerNode(Node):
                 f"🔔 RunSkill 요청: PICK, object_name='{cmd.object_name}'"
             )
 
-            success, message, confidence, final_pose = pick.run_pick_skill(
+            # 1차 시도: 바로 PICK
+            pick_success, pick_msg, pick_conf, pick_pose = pick.run_pick_skill(
                 cmd, self.ctx
             )
 
-            response.success = success
-            response.message = message
-            response.confidence = confidence
-            response.final_pose = final_pose
+            # 성공하면 그대로 반환
+            if pick_success:
+                response.success = True
+                response.message = pick_msg
+                response.confidence = pick_conf
+                response.final_pose = pick_pose
+                return response
+
+            # ------------------------
+            # 여기부터는 "픽 실패" 후 리커버리 로직
+            # ------------------------
+            # 예: 메시지나 confidence 기준으로 "디텍션 실패"만 골라서 처리해도 됨
+            self.get_logger().warn(
+                f"[PICK] 1차 시도 실패(message='{pick_msg}', conf={pick_conf:.2f}), "
+                f"FIND로 자세를 조정 후 재시도합니다."
+            )
+
+            # 2) FIND 시도 (같은 object_name)
+            find_cmd = SkillCommand()
+            find_cmd.skill_type = SkillCommand.FIND
+            find_cmd.object_name = cmd.object_name
+            find_cmd.target_pose = PoseStamped()  # Find는 pose 안 씀
+            # 필요하면 params_json으로 검색 시간 지정 가능
+            find_cmd.params_json = '{"max_search_time": 30.0, "scan_interval": 1.0}'
+
+            find_success, find_msg, find_conf, _ = find.run_find_skill(
+                find_cmd, self.ctx
+            )
+
+            if not find_success:
+                # FIND도 실패 → 최종 실패
+                msg = (
+                    f"PICK failed and FIND also failed. "
+                    f"pick_msg='{pick_msg}', find_msg='{find_msg}'"
+                )
+                self.get_logger().warn(f"[PICK] {msg}")
+                response.success = False
+                response.message = msg
+                response.confidence = max(pick_conf, find_conf)
+                response.final_pose = PoseStamped()
+                return response
+
+            # 3) FIND 성공했으니, 다시 한 번 PICK 재시도
+            self.get_logger().info(
+                f"[PICK] FIND 성공(conf={find_conf:.2f}), PICK 재시도"
+            )
+
+            pick2_success, pick2_msg, pick2_conf, pick2_pose = pick.run_pick_skill(
+                cmd, self.ctx
+            )
+
+            response.success = pick2_success
+            response.message = pick2_msg
+            response.confidence = pick2_conf
+            response.final_pose = pick2_pose if pick2_success else PoseStamped()
             return response
 
         elif cmd.skill_type == SkillCommand.FIND:
