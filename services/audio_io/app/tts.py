@@ -158,7 +158,7 @@ class TTS(BaseTTS):
 
         # 🔹 재생 속도 조절 (자비스 모드일 때만 살짝 느리게)
         if self.effect == "jarvis":
-            speed_factor = 0.9  # 0.85 = 15% 느리게 (0.7~0.9 사이에서 취향대로 조정 가능)
+            speed_factor = 0.95  # 0.85 = 15% 느리게 (0.7~0.9 사이에서 취향대로 조정 가능)
             playback_sr = int(sr * speed_factor)
         else:
             playback_sr = sr
