@@ -59,6 +59,7 @@ PyAudio==0.2.14
 openwakeword==0.6.0
 pvporcupine==3.0.0
 tflite-runtime==2.14.0
+pynput
 
 ########################################
 # Hardware IO / 시스템 유틸

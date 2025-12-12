@@ -216,6 +216,137 @@ class StreamingSTT:
         """
         return self.listen_and_transcribe()
 
+    def _record_while_active(self, is_active_cb) -> np.ndarray:
+        """
+        외부에서 넘겨준 is_active_cb() 가 True인 동안만 마이크를 녹음한다.
+        - chunk_duration 단위로 계속 읽으면서
+        - 버튼(예: space)이 눌려 있는 동안만 버퍼에 추가
+        - 버튼이 떼어지면 즉시 루프 종료
+        - 전체 구간에 대해 VAD 기반 speech_ratio를 계산해서
+          '거의 말이 없으면' 잡음으로 간주하고 빈 배열 반환
+        """
+        print("[STT] 🎙 push-to-talk 녹음을 시작합니다. 버튼이 눌려 있는 동안만 입력됩니다.")
+
+        num_samples_per_chunk = int(self.samplerate * self.chunk_duration)
+        vad_frame_ms = 20
+        vad_frame_len = int(self.samplerate * vad_frame_ms / 1000)
+
+        chunks: list[np.ndarray] = []
+        start_time = time.time()
+
+        # ambient 초기화 (원래 _record_until_silence에서 쓰던 것 재사용)
+        self.ambient_energy = None
+        ambient_samples: list[float] = []
+        ambient_collect_sec = 1.0
+        ambient_end_time = start_time + ambient_collect_sec
+
+        while True:
+            # 버튼이 떼어졌다면 루프 종료
+            if not is_active_cb():
+                print("[STT] 🛑 push-to-talk 비활성화 감지 → 녹음 종료")
+                break
+
+            audio_block = sd.rec(
+                num_samples_per_chunk,
+                samplerate=self.samplerate,
+                channels=1,
+                dtype="int16",
+            )
+            sd.wait()
+
+            audio_block = audio_block.reshape(-1)
+            chunks.append(audio_block.copy())
+
+            block_energy = float(np.abs(audio_block).mean())
+            now = time.time()
+
+            # ambient 추정
+            if self.ambient_energy is None:
+                ambient_samples.append(block_energy)
+                if now >= ambient_end_time and ambient_samples:
+                    self.ambient_energy = float(np.mean(ambient_samples))
+                    print(f"[STT] 🌡 ambient_energy 추정 (PTT): {self.ambient_energy:.2f}")
+            ambient = self.ambient_energy or block_energy
+
+            adaptive_threshold = max(self.energy_threshold, ambient * 2.0)
+            print(
+                f"[STT] (PTT) 🔊 block_energy={block_energy:.2f}, "
+                f"ambient={ambient:.2f}, adaptive_th={adaptive_threshold:.2f}"
+            )
+
+            # 안전장치: 너무 오래 누르고 있어도 종료
+            if (now - start_time) >= self.max_total_sec:
+                print("[STT] ⏱ (PTT) 최대 녹음 시간 초과로 종료합니다.")
+                break
+
+        if not chunks:
+            print("[STT] ⚠ (PTT) 녹음된 chunk가 없습니다.")
+            return np.zeros((0,), dtype=np.int16)
+
+        audio_all = np.concatenate(chunks, axis=0)
+
+        # 전체 구간에 대해 speech_ratio 계산 → 잡음 필터링
+        total_frames = len(audio_all) // vad_frame_len
+        if total_frames > 0:
+            total_speech_frames = 0
+            for i in range(total_frames):
+                frame = audio_all[i * vad_frame_len : (i + 1) * vad_frame_len]
+                if self.vad.is_speech(frame.tobytes(), self.samplerate):
+                    total_speech_frames += 1
+            total_speech_ratio = total_speech_frames / float(total_frames)
+        else:
+            total_speech_ratio = 0.0
+
+        print(f"[STT] (PTT) 📊 전체 total_speech_ratio={total_speech_ratio:.2f}")
+
+        if total_speech_ratio < 0.1:
+            print("[STT] (PTT) ⚠ 음성 비율이 너무 낮아서 '말이 없는 잡음'으로 간주합니다.")
+            return np.zeros((0,), dtype=np.int16)
+
+        return audio_all
+
+    def listen_and_transcribe_while(self, is_active_cb) -> str:
+        """
+        - is_active_cb() 가 True인 동안만 녹음
+        - 버튼이 떼어지면 바로 종료
+        - Whisper로 전송 후 텍스트 반환
+        """
+        audio_all = self._record_while_active(is_active_cb)
+
+        if audio_all.size == 0:
+            print("[STT] (PTT) ⚠ 유효한 음성이 없어서 빈 결과를 반환합니다.")
+            return ""
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+            wav.write(temp_wav.name, self.samplerate, audio_all)
+            temp_path = temp_wav.name
+
+        print(f"[STT] (PTT) 🎧 Whisper로 전송 중... ({temp_path})")
+
+        with open(temp_path, "rb") as f:
+            transcript = self.client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                prompt=(
+                    "This audio comes from a robot command environment. "
+                    "Ignore background noise, random conversations, and TV or music. "
+                    "Only transcribe clear commands or questions addressed to the robot, "
+                    "in Korean or English. If there is no clear speech, return an empty result."
+                ),
+            )
+
+        text = transcript.text.strip()
+        print(f"[STT] (PTT) ✅ 인식 결과: {text!r}")
+        return text
+
+    def transcribe_while(self, is_active_cb) -> str:
+        """
+        main.py에서 push-to-talk 모드용으로 사용하는 API.
+        버튼이 눌려 있는 동안만 녹음 → Whisper → 텍스트.
+        """
+        return self.listen_and_transcribe_while(is_active_cb)
+
+
 
 if __name__ == "__main__":
     stt = StreamingSTT()

@@ -5,6 +5,7 @@ import subprocess
 import random
 import time
 import json
+import os
 
 ROOT = Path(__file__).resolve().parents[3]  # /home/rokey/DUM-E
 if str(ROOT) not in sys.path:
@@ -24,6 +25,15 @@ from services.llm_agent.app.skill_planner import plan_skill_flow
 from services.llm_agent.ros_bridge import call_run_skill
 from dum_e_interfaces.msg import SkillCommand
 
+try:
+    from pynput import keyboard
+except ImportError:
+    keyboard = None
+    print("[AudioIO] ⚠ pynput 미설치 상태입니다. push_to_talk 모드는 동작하지 않을 수 있습니다.")
+
+AUDIO_MODE = os.getenv("DUM_E_AUDIO_MODE", "wakeword").lower()
+print(f"[AudioIO] 🔧 AUDIO_MODE = {AUDIO_MODE}")
+
 app = FastAPI(title="Dummy Audio IO Service")
 
 mic = MicController(MicConfig())
@@ -42,6 +52,8 @@ _last_wakeup_flag = False
 _busy = False
 
 _robot_proc: subprocess.Popen | None = None
+
+_push_to_talk_active = False
 
 GREETING_RESPONSES = [
     "Systems online, sir. Standing by for your command.",
@@ -209,7 +221,7 @@ def _execute_plan(plan: dict) -> bool:
             )
 
             executed_any = True
-            break
+            continue
 
         elif skill == "FIND":
             obj = step.get("object") or {}
@@ -241,41 +253,43 @@ def _execute_plan(plan: dict) -> bool:
             )
 
             executed_any = True
-            break
+            continue
 
         else:
             print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")
 
     return executed_any
 
-def _on_wake_detected(keyword: str):
+def _run_single_command_flow(
+    preface_msg: str | None = None,
+    transcribe_fn=None,
+):
     """
-    wakeword 루프 스레드에서 호출되는 콜백.
-    여기서 STT를 동기적으로 실행하고,
-    플래너 → ROS 실행까지 처리한다.
+    - (선택) preface_msg 를 먼저 TTS로 말해주고
+    - STT 1회 → planner → ROS 실행까지 한 번에 처리.
+    - transcribe_fn 이 None이면 기본적으로 stt.transcribe_once() 사용.
     """
-    global _last_wakeup_flag, _busy
+    global _busy
+
+    if transcribe_fn is None:
+        transcribe_fn = stt.transcribe_once
 
     if _busy:
-        print(f"[AudioIO] ⚠ 이미 명령 처리 중이므로 이번 wakeword('{keyword}')는 무시합니다.")
+        print("[AudioIO] ⚠ 이미 명령 처리 중입니다. 이번 호출은 무시합니다.")
         return
 
     _busy = True
-
-    print(f"[AudioIO] >>> WAKE WORD DETECTED! ({keyword}) STT 시작")
-    _last_wakeup_flag = True
-
     try:
-        try:
-            wake_msg = random.choice(WAKE_RESPONSES)
-            print(f"[AudioIO] 💬 Wake response: {wake_msg}")
-            tts.speak(wake_msg)
-            time.sleep(1.0)
-        except Exception as e:
-            print(f"[AudioIO] ❌ TTS 에러 (wake response): {e}")
+        if preface_msg:
+            try:
+                print(f"[AudioIO] 💬 Preface: {preface_msg}")
+                tts.speak(preface_msg)
+                time.sleep(1.0)
+            except Exception as e:
+                print(f"[AudioIO] ❌ TTS 에러 (preface): {e}")
 
         # 1) STT 실행 (blocking)
-        user_text = stt.transcribe_once()
+        user_text = transcribe_fn()
         print(f"[AudioIO] 🎙 사용자가 말한 내용: '{user_text}'")
 
         if not user_text.strip():
@@ -336,33 +350,141 @@ def _on_wake_detected(keyword: str):
                     print(f"[AudioIO] ❌ TTS 에러: {e}")
             else:
                 complete_msg = random.choice(COMPLETE_RESPONSES)
-                print("[AudioIO] ✅ Plan execution complete: {complete_msg}")
+                print(f"[AudioIO] ✅ Plan execution complete: {complete_msg}")
                 tts.speak(complete_msg)
                 time.sleep(0.5)
 
     finally:
         _busy = False
 
+def _on_wake_detected(keyword: str):
+    """
+    wakeword 루프 스레드에서 호출되는 콜백.
+    여기서 STT를 동기적으로 실행하고,
+    플래너 → ROS 실행까지 처리한다.
+    """
+    global _last_wakeup_flag
+
+    print(f"[AudioIO] >>> WAKE WORD DETECTED! ({keyword}) STT 시작")
+    _last_wakeup_flag = True
+
+    wake_msg = random.choice(WAKE_RESPONSES)
+    _run_single_command_flow(preface_msg=wake_msg)
+
+def _on_space_pressed():
+    """
+    스페이스 키를 눌렀을 때 한 번의 명령을 처리.
+    - _push_to_talk_active 가 True인 동안만 STT 녹음
+    - 키를 떼면 녹음 종료 후 Whisper 전송
+    """
+    print("[AudioIO] ⌨ Space pressed → push-to-talk command flow 시작")
+
+    # 현재 스레드에서 보는 플래그를 캡쳐하기 위한 클로저
+    def is_active():
+        return _push_to_talk_active
+
+    # push-to-talk에서는 굳이 "I'm listening" 같은 프리페이스는 안 해도 됨
+    _run_single_command_flow(
+        preface_msg=None,
+        transcribe_fn=lambda: stt.transcribe_while(is_active),
+    )
+
+
+def _start_push_to_talk_loop():
+    """
+    pynput 키보드 리스너를 이용해 space 키를 감지.
+    space 누를 때마다 _on_space_pressed() 호출.
+    """
+    global _push_to_talk_active
+
+    if keyboard is None:
+        print("[AudioIO] ❌ pynput 모듈이 없어 push_to_talk 모드를 사용할 수 없습니다.")
+        return
+
+    def on_press(key):
+        global _push_to_talk_active
+        try:
+            if key == keyboard.Key.space:
+                # 이미 처리 중이면 중복 호출 방지
+                if not _push_to_talk_active:
+                    _push_to_talk_active = True
+                    # 명령 처리는 별도 스레드에서
+                    threading.Thread(
+                        target=_on_space_pressed,
+                        daemon=True,
+                    ).start()
+        except Exception as e:
+            print(f"[AudioIO] ⚠ on_press 에러: {e}")
+
+    def on_release(key):
+        global _push_to_talk_active
+        try:
+            if key == keyboard.Key.space:
+                _push_to_talk_active = False
+        except Exception as e:
+            print(f"[AudioIO] ⚠ on_release 에러: {e}")
+
+    print("[AudioIO] ⌨ push_to_talk 키 리스너 시작 (space 키)")
+
+    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
 
 @app.on_event("startup")
 def on_startup():
     global wake_thread
     print("[AudioIO] FastAPI startup")
     mic.open_stream()
-    wake.init_model()
 
-    wake_thread = threading.Thread(
-        target=start_wakeword_loop,
-        args=(wake, _on_wake_detected, 0.0),
-        daemon=True,
-    )
-    wake_thread.start()
+    if AUDIO_MODE == "wakeword":
+        # 기존 wakeword 모드
+        wake.init_model()
 
-    greeting_msg = random.choice(GREETING_RESPONSES)
-    print(f"[AudioIO] 💬 Greeting: {greeting_msg}")
-    tts.speak(greeting_msg)
-    time.sleep(0.5)
-    print("[AudioIO] ✅ Wakeword loop started")
+        wake_thread = threading.Thread(
+            target=start_wakeword_loop,
+            args=(wake, _on_wake_detected, 0.0),
+            daemon=True,
+        )
+        wake_thread.start()
+
+        greeting_msg = random.choice(GREETING_RESPONSES)
+        print(f"[AudioIO] 💬 Greeting (wakeword): {greeting_msg}")
+        tts.speak(greeting_msg)
+        time.sleep(0.5)
+        print("[AudioIO] ✅ Wakeword loop started")
+
+    elif AUDIO_MODE == "push_to_talk":
+        # push-to-talk 모드
+        greeting_msg = (
+            "Systems online, sir. Push and hold the space bar to issue a command."
+        )
+        print(f"[AudioIO] 💬 Greeting (push_to_talk): {greeting_msg}")
+        tts.speak(greeting_msg)
+        time.sleep(0.5)
+
+        pt_thread = threading.Thread(
+            target=_start_push_to_talk_loop,
+            daemon=True,
+        )
+        pt_thread.start()
+        print("[AudioIO] ✅ Push-to-talk loop started (space key)")
+
+    else:
+        # 알 수 없는 모드인 경우 안전하게 wakeword 모드로 폴백
+        print(f"[AudioIO] ⚠ Unknown AUDIO_MODE='{AUDIO_MODE}', falling back to wakeword mode.")
+        wake.init_model()
+
+        wake_thread = threading.Thread(
+            target=start_wakeword_loop,
+            args=(wake, _on_wake_detected, 0.0),
+            daemon=True,
+        )
+        wake_thread.start()
+
+        greeting_msg = random.choice(GREETING_RESPONSES)
+        print(f"[AudioIO] 💬 Greeting (fallback wakeword): {greeting_msg}")
+        tts.speak(greeting_msg)
+        time.sleep(0.5)
+        print("[AudioIO] ✅ Wakeword loop started (fallback)")
 
 
 @app.on_event("shutdown")
