@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # python debug_yolo_stream.py \
-#   --model /home/rokey/DUM-E/ros2_ws/src/dum_e_perception/models/yolov8m-worldv2.pt \
+#   --model /home/rokey/DUM-E/ros2_ws/src/dum_e_perception/models/yoloe-11m-seg.pt \
 #   --device cuda \
 #   --camera 0 \
 #   --classes "scissors,screwdriver,water bottle" \

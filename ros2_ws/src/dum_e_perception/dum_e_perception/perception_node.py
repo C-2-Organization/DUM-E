@@ -17,7 +17,7 @@ class PerceptionNode(Node):
 
         # 1) Get model path
         share_dir = get_package_share_directory("dum_e_perception")
-        model_path = os.path.join(share_dir, "models", "yolov8m-worldv2.pt")
+        model_path = os.path.join(share_dir, "models", "yoloe-11m-seg.pt")
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"YOLO model not found: {model_path}")
