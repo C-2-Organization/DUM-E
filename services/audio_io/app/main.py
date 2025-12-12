@@ -99,30 +99,6 @@ COMPLETE_RESPONSES = [
     "Complete. Standing by for your next command.",
 ]
 
-def _is_robot_wakeup_command(text: str) -> bool:
-    """
-    STT 결과가 '로봇 깨워', 'wakeup robot' 같은 로봇 기동 명령인지 판별.
-    너무 복잡하게 가지 말고, 자주 쓸 패턴만 단순 매칭.
-    """
-    t = text.strip().lower()
-    if not t:
-        return False
-
-    # 영어 패턴
-    if "wakeup robot" in t or "wake up robot" in t:
-        return True
-    if "wakeup dummy" in t or "wake up dummy" in t:
-        return True
-
-    # 한국어 패턴 (필요하면 여기 계속 추가하면 됨)
-    # 예: "로봇 깨워", "로봇 좀 깨워줘", "로봇 켜", "더미 깨워"
-    if "로봇" in t and ("깨워" in t or "켜" in t):
-        return True
-    if "더미" in t and ("깨워" in t or "켜" in t):
-        return True
-
-    return False
-
 def _is_robot_already_running() -> bool:
     """
     이미 ros2 launch가 떠 있는지 간단히 체크.
@@ -161,7 +137,6 @@ def _execute_plan(plan: dict) -> bool:
     """
     planner가 만들어준 JSON(plan)을 보고 실제 ROS 스킬을 실행한다.
 
-    - 현재는 PICK 스킬만 지원
     - 성공적으로 지원 가능한 스킬을 하나라도 실행하면 True
     - 아무 것도 실행하지 못하면 False
     """
@@ -173,10 +148,27 @@ def _execute_plan(plan: dict) -> bool:
     executed_any = False
 
     for step in steps:
-        skill = step.get("skill")
-        if skill == "PICK":
+        skill = (step.get("skill") or "").upper()
+
+        if skill == "ROBOT_WAKEUP":
+            print("[AudioIO] 🤖 ROBOT_WAKEUP 스텝 실행 시도")
+
+            started = _launch_robot_bringup()
+            try:
+                if started:
+                    tts.speak("Waking up dummy, sir.")
+                else:
+                    if _is_robot_already_running():
+                        tts.speak("Dummy is already running, sir.")
+                    else:
+                        tts.speak("There was a problem waking up dummy. Please try again later, sir.")
+            except Exception as e:
+                print(f"[AudioIO] ❌ TTS 에러 (ROBOT_WAKEUP): {e}")
+            executed_any = True
+            continue
+
+        elif skill == "PICK":
             obj = step.get("object") or {}
-            # canonical_en 있으면 그걸 우선 사용, 없으면 raw
             obj_name = obj.get("canonical_en") or obj.get("raw") or ""
             if not obj_name:
                 print("[AudioIO] ⚠ PICK 스텝에 object_name 이 없음:", step)
@@ -188,13 +180,12 @@ def _execute_plan(plan: dict) -> bool:
                 resp = call_run_skill(
                     skill_type=SkillCommand.PICK,
                     object_name=obj_name,
-                    target_pose=None,      # pose는 내부 스킬 로직에 맡김
-                    params_json="",        # 옵션 필요시 나중에 추가
-                    timeout_sec=60.0,      # 실제 동작 고려해서 넉넉히
+                    target_pose=None,
+                    params_json="",
+                    timeout_sec=60.0,
                 )
             except Exception as e:
                 print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
-                # 여기서 바로 실패 반환할지, 다음 step 시도할지는 정책 문제
                 return False
 
             print(
@@ -203,15 +194,38 @@ def _execute_plan(plan: dict) -> bool:
             )
 
             executed_any = True
-            # 현재는 PICK 하나만 지원하니까 첫 PICK 실행 후 바로 종료
             break
 
+        elif skill == "FIND":
+            obj = step.get("object") or {}
+            obj_name = obj.get("canonical_en") or obj.get("raw") or ""
+            if not obj_name:
+                print("[AudioIO] ⚠ FIND 스텝에 object_name 이 없음:", step)
+                continue
+
+            print(f"[AudioIO] 🦾 실행: FIND '{obj_name}'")
+
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.FIND,
+                    object_name=obj_name,
+                    target_pose=None,
+                    params_json="",
+                    timeout_sec=60.0,
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
+                return False
+
+            print(
+                f"[AudioIO] ✅ /run_skill 응답: success={resp.success}, "
+                f"confidence={resp.confidence:.2f}, message='{resp.message}'"
+            )
+
         else:
-            # 지금은 PICK 외에는 직접 실행하지 않음
             print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")
 
     return executed_any
-
 
 def _on_wake_detected(keyword: str):
     """
@@ -251,25 +265,6 @@ def _on_wake_detected(keyword: str):
         print(f"[AudioIO] 💬 Command ack: {ack_msg}")
         tts.speak(ack_msg)
         time.sleep(1.0)
-
-        # 로봇 깨우기 전용 명령인지 먼저 체크
-        if _is_robot_wakeup_command(user_text):
-            print("[AudioIO] 🤖 로봇 깨우기 명령으로 인식됨")
-
-            started = _launch_robot_bringup()
-            try:
-                if started:
-                    # 로봇이 꺼져 있었다 → 새로 켜는 중
-                    tts.speak("Waking up dummy")
-                else:
-                    # 이미 켜져 있거나 실행 실패
-                    if _is_robot_already_running():
-                        tts.speak("Dummy is already running.")
-                    else:
-                        tts.speak("There was a problem waking up dummy. Please try again later.")
-            except Exception as e:
-                print(f"[AudioIO] ❌ TTS 에러: {e}")
-            return
 
         # 2) Planner 호출: 자연어 → 스킬 플로우(JSON)
         try:
