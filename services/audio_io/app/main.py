@@ -17,6 +17,7 @@ from .mic import MicController
 from .wakeword import WakeupWord, start_wakeword_loop
 from .stt import StreamingSTT
 from .tts import TTS
+from .jarvis_assistant import JarvisAssistant
 
 from services.llm_agent.app.skill_planner import plan_skill_flow
 from services.llm_agent.ros_bridge import call_run_skill
@@ -27,7 +28,13 @@ app = FastAPI(title="Dummy Audio IO Service")
 mic = MicController(MicConfig())
 wake = WakeupWord(mic)
 stt = StreamingSTT()
-tts = TTS()
+tts = TTS(
+    model="gpt-4o-mini-tts",  # 기본값이라 사실 안 써도 되지만 명시해둘게
+    voice="onyx",             # 제일 저음 보이스
+    effect="jarvis",          # 기계음 + 자비스 느낌 DSP 필터 ON
+)
+tts.set_voice("onyx")   # 시작할 때 한 번만 호출해도 됨
+jarvis = JarvisAssistant(tts=tts)
 
 wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
@@ -36,16 +43,17 @@ _busy = False
 _robot_proc: subprocess.Popen | None = None
 
 GREETING_RESPONSES = [
-    "Systems online, sir. Standing by for your command.",
-    "Initialization complete. Ready when you are, sir.",
-    "All systems functional. How may I assist, sir?",
-    "Wakeword monitoring activated. I'm here, sir.",
-    "Operational and awaiting your direction, sir.",
-    "Diagnostics clear. At your service, sir.",
-    "Startup sequence complete. Listening now, sir.",
-    "Good day, sir. Ready for deployment.",
-    "Everything’s set. Please proceed when ready, sir.",
-    "Full system readiness achieved. How can I help, sir?",
+    "good morning, sir. Standing by for your command.",
+    "For you, Sir, Always."
+    # "Initialization complete. Ready when you are, sir.",
+    # "All systems functional. How may I assist, sir?",
+    # "Wakeword monitoring activated. I'm here, sir.",
+    # "Operational and awaiting your direction, sir.",
+    # "Diagnostics clear. At your service, sir.",
+    # "Startup sequence complete. Listening now, sir.",
+    # "Good day, sir. Ready for deployment.",
+    # "Everything’s set. Please proceed when ready, sir.",
+    # "Full system readiness achieved. How can I help, sir?",
 ]
 
 WAKE_RESPONSES = [
@@ -53,27 +61,20 @@ WAKE_RESPONSES = [
     "At your service, sir.",
     "How can I assist, sir?",
     "I'm listening, sir.",
-    "Ready when you are.",
+    "Ready and waiting, sir.",
     "Standing by, sir.",
-    "Go ahead, sir.",
-    "Online and awaiting orders.",
-    "Here, sir.",
-    "What do you need, sir?",
+    "Awaiting your command.",
+    "What can I do for you, sir?",
+    "Online and attentive, sir.",
+    "Yes, I'm here.",
 ]
 
-COMMAND_ACK_RESPONSES = [
+EXECUTE_RESPONSES = [
+    "Understood. Executing your command, sir.",
+    "Acknowledged. Initiating the requested sequence.",
+    "Your instructions are clear. Proceeding now.",
+    "Command received. Beginning operations.",
     "I'm on it, sir.",
-    "For you, Sir, Always.",
-    "Understood, sir. Executing now.",
-    "Right away, sir.",
-    "As you command, sir.",
-    "Consider it done.",
-    "On your order, sir.",
-    "Initializing protocol, sir.",
-    "Affirmative. Processing.",
-    "Certainly, sir. Handling it now.",
-    "Your wish is my command.",
-    "Acknowledged. Beginning operation.",
     "At your service, sir.",
     "Execution confirmed.",
     "Working on it immediately.",
@@ -88,40 +89,17 @@ COMMAND_ACK_RESPONSES = [
 
 COMPLETE_RESPONSES = [
     "Task completed, sir.",
-    "Operation successful. Anything else you require?",
-    "The process has finished, sir.",
-    "Execution complete. Awaiting further instructions.",
+    "Operation successful. Anything else?",
+    "The requested process has been completed.",
+    "Execution finished. Awaiting your next command.",
     "Mission accomplished, sir.",
-    "Your request has been fulfilled.",
-    "All done, sir. Ready for the next task.",
-    "The action has been carried out successfully.",
-    "Procedure finalized, sir.",
-    "Complete. Standing by for your next command.",
+    "All done. How else can I help?",
+    "Sequence complete. Standing by.",
+    "Your instructions have been fully carried out.",
+    "Everything is done as requested.",
+    "Process completed without issues, sir.",
 ]
 
-def _is_robot_wakeup_command(text: str) -> bool:
-    """
-    STT 결과가 '로봇 깨워', 'wakeup robot' 같은 로봇 기동 명령인지 판별.
-    너무 복잡하게 가지 말고, 자주 쓸 패턴만 단순 매칭.
-    """
-    t = text.strip().lower()
-    if not t:
-        return False
-
-    # 영어 패턴
-    if "wakeup robot" in t or "wake up robot" in t:
-        return True
-    if "wakeup dummy" in t or "wake up dummy" in t:
-        return True
-
-    # 한국어 패턴 (필요하면 여기 계속 추가하면 됨)
-    # 예: "로봇 깨워", "로봇 좀 깨워줘", "로봇 켜", "더미 깨워"
-    if "로봇" in t and ("깨워" in t or "켜" in t):
-        return True
-    if "더미" in t and ("깨워" in t or "켜" in t):
-        return True
-
-    return False
 
 def _is_robot_already_running() -> bool:
     """
@@ -129,6 +107,7 @@ def _is_robot_already_running() -> bool:
     """
     global _robot_proc
     return _robot_proc is not None and _robot_proc.poll() is None
+
 
 def _launch_robot_bringup() -> bool:
     """
@@ -138,77 +117,79 @@ def _launch_robot_bringup() -> bool:
     global _robot_proc
 
     if _is_robot_already_running():
-        print("[AudioIO] 🤖 로봇 bringup 이 이미 실행 중인 것 같아요.")
+        print("[AudioIO] ℹ 이미 ros2 bringup이 떠 있습니다.")
         return False
 
-    cmd = ["ros2", "launch", "dum_e_bringup", "dum_e_bringup.launch.py"]
-    print(f"[AudioIO] 🚀 로봇 bringup 실행: {' '.join(cmd)}")
-
     try:
-        # stdout/stderr는 필요하면 로그 파일로 돌려도 됨
+        print("[AudioIO] 🚀 ros2 bringup 실행 시도...")
         _robot_proc = subprocess.Popen(
-            cmd,
+            [
+                "ros2",
+                "launch",
+                "dum_e_bringup",
+                "dum_e_bringup.launch.py",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        print(f"[AudioIO] ✅ bringup 프로세스 시작 (pid={_robot_proc.pid})")
         return True
     except Exception as e:
-        print(f"[AudioIO] ❌ ros2 launch 실행 실패: {e}")
+        print(f"[AudioIO] ❌ bringup 실행 실패: {e}")
         _robot_proc = None
         return False
 
+
+def _is_robot_wakeup_command(text: str) -> bool:
+    """
+    사용자의 명령이 '로봇 깨우기' 관련인지 간단 판별.
+    """
+    text = text.lower()
+    wake_keywords = [
+        "wake up",
+        "wakeup",
+        "wake dummy",
+        "turn on robot",
+        "turn on dummy",
+        "로봇 켜",
+        "더미 켜",
+        "더미 깨워",
+    ]
+    return any(k in text for k in wake_keywords)
+
+
 def _execute_plan(plan: dict) -> bool:
     """
-    planner가 만들어준 JSON(plan)을 보고 실제 ROS 스킬을 실행한다.
-
-    - 현재는 PICK 스킬만 지원
-    - 성공적으로 지원 가능한 스킬을 하나라도 실행하면 True
-    - 아무 것도 실행하지 못하면 False
+    Planner가 생성한 plan(JSON)을 실제 ROS 스킬 실행으로 연결.
     """
-    steps = plan.get("steps") or []
-    if not isinstance(steps, list):
-        print("[AudioIO] ⚠ plan.steps 가 리스트가 아님:", steps)
+    skills = plan.get("skills", [])
+    if not skills:
+        print("[AudioIO] ⚠ plan에 skills가 비어 있습니다.")
         return False
 
     executed_any = False
 
-    for step in steps:
-        skill = step.get("skill")
-        if skill == "PICK":
-            obj = step.get("object") or {}
-            # canonical_en 있으면 그걸 우선 사용, 없으면 raw
-            obj_name = obj.get("canonical_en") or obj.get("raw") or ""
-            if not obj_name:
-                print("[AudioIO] ⚠ PICK 스텝에 object_name 이 없음:", step)
-                continue
+    for skill in skills:
+        skill_name = skill.get("name")
+        params = skill.get("params", {})
 
-            print(f"[AudioIO] 🦾 실행: PICK '{obj_name}'")
+        if not skill_name:
+            print(f"[AudioIO] ⚠ 잘못된 skill 항목: {skill}")
+            continue
 
-            try:
-                resp = call_run_skill(
-                    skill_type=SkillCommand.PICK,
-                    object_name=obj_name,
-                    target_pose=None,      # pose는 내부 스킬 로직에 맡김
-                    params_json="",        # 옵션 필요시 나중에 추가
-                    timeout_sec=60.0,      # 실제 동작 고려해서 넉넉히
-                )
-            except Exception as e:
-                print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
-                # 여기서 바로 실패 반환할지, 다음 step 시도할지는 정책 문제
-                return False
+        print(f"[AudioIO] ▶ 스킬 실행 요청: {skill_name} (params={params})")
 
-            print(
-                f"[AudioIO] ✅ /run_skill 응답: success={resp.success}, "
-                f"confidence={resp.confidence:.2f}, message='{resp.message}'"
-            )
+        msg = SkillCommand()
+        msg.skill_name = skill_name
+        msg.json_param = str(params)
 
+        try:
+            result = call_run_skill(msg)
+            print(f"[AudioIO] ✅ 스킬 결과: {result}")
             executed_any = True
-            # 현재는 PICK 하나만 지원하니까 첫 PICK 실행 후 바로 종료
-            break
-
-        else:
-            # 지금은 PICK 외에는 직접 실행하지 않음
-            print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")
+        except Exception as e:
+            print(f"[AudioIO] ❌ 스킬 실행 에러: {e}")
+            continue
 
     return executed_any
 
@@ -225,34 +206,22 @@ def _on_wake_detected(keyword: str):
         print(f"[AudioIO] ⚠ 이미 명령 처리 중이므로 이번 wakeword('{keyword}')는 무시합니다.")
         return
 
-    _busy = True
-
     print(f"[AudioIO] >>> WAKE WORD DETECTED! ({keyword}) STT 시작")
     _last_wakeup_flag = True
 
     try:
-        try:
-            wake_msg = random.choice(WAKE_RESPONSES)
-            print(f"[AudioIO] 💬 Wake response: {wake_msg}")
-            tts.speak(wake_msg)
-            time.sleep(1.0)
-        except Exception as e:
-            print(f"[AudioIO] ❌ TTS 에러 (wake response): {e}")
+        # 0) Busy 플래그 설정
+        _busy = True
 
-        # 1) STT 실행 (blocking)
-        user_text = stt.listen_and_transcribe()
-        print(f"[AudioIO] 🎙 사용자가 말한 내용: '{user_text}'")
+        # 1) STT로 사용자 발화 인식
+        user_text = stt.transcribe_once()
+        print(f"[AudioIO] 🗣 STT 결과: {user_text!r}")
 
-        if not user_text.strip():
-            print("[AudioIO] ⚠ STT 결과가 비어있음. 다시 대기.")
+        if not user_text:
+            print("[AudioIO] ⚠ STT 결과가 비어 있습니다. 명령 처리 중단.")
             return
 
-        ack_msg = random.choice(COMMAND_ACK_RESPONSES)
-        print(f"[AudioIO] 💬 Command ack: {ack_msg}")
-        tts.speak(ack_msg)
-        time.sleep(1.0)
-
-        # 로봇 깨우기 전용 명령인지 먼저 체크
+        # 1-A) 로봇 깨우기 전용 명령인지 먼저 체크
         if _is_robot_wakeup_command(user_text):
             print("[AudioIO] 🤖 로봇 깨우기 명령으로 인식됨")
 
@@ -277,9 +246,12 @@ def _on_wake_detected(keyword: str):
         except Exception as e:
             print(f"[AudioIO] ❌ Planner 에러: {e}")
             try:
-                tts.speak("I'm having a trouble while I'm organizing the process. Please try again later, sir.")
+                # 자비스 스타일로 사과 + 재시도 안내
+                jarvis.reply_and_speak(
+                    "A system issue occurred while organizing the internal task sequence. "
+                    "Please apologize to the user in a concise and respectful manner, and inform them to try again shortly."                )
             except Exception as tts_err:
-                print(f"[AudioIO] ❌ TTS 에러: {tts_err}")
+                print(f"[AudioIO] ❌ Jarvis/TTS 에러: {tts_err}")
             return
 
         print("[AudioIO] 🧠 Planner 결과:")
@@ -294,31 +266,32 @@ def _on_wake_detected(keyword: str):
             print(f"[AudioIO] ❌ Process execution failed: {msg}")
 
             try:
-                tts.speak(msg)
+                # planner가 준 메시지를 바탕으로, 현재 명령을 수행할 수 없는 이유를 정중하게 설명
+                jarvis.reply_and_speak(
+                    f"Based on the following information, explain in a concise and polite manner why the requested command cannot be executed: {msg}"                )
             except Exception as e:
-                print(f"[AudioIO] ❌ TTS 에러: {e}")
+                print(f"[AudioIO] ❌ Jarvis/TTS 에러: {e}")
 
         else:
             # 3-B) 수행 가능한 경우 → 실제 ROS 스킬 실행
             executed = _execute_plan(plan)
 
             if not executed:
-                # 계획 상으로는 can_execute_now=True 인데,
-                # 우리가 실제로 지원하는 스킬이 없거나 실행 실패한 경우
-                fallback_msg = (
-                    user_message
-                    or "Process execution failed."
-                )
-                print(f"[AudioIO] ⚠ 계획은 가능하다고 했지만 실제 실행 실패: {fallback_msg}")
+                # 계획 상으로는 can_execute_now = True였으나,
+                # 실제 스킬 실행은 1개도 성공하지 못한 경우
                 try:
-                    tts.speak(fallback_msg)
+                    tts.speak("I tried to execute the process, but there was an issue. Please check the system, sir.")
                 except Exception as e:
                     print(f"[AudioIO] ❌ TTS 에러: {e}")
-            else:
-                complete_msg = random.choice(COMPLETE_RESPONSES)
-                print("[AudioIO] ✅ Plan execution complete: {complete_msg}")
+                return
+
+            # 4) 수행 완료 후 짧은 피드백
+            complete_msg = random.choice(COMPLETE_RESPONSES)
+            print(f"[AudioIO] 💬 COMPLETE: {complete_msg}")
+            try:
                 tts.speak(complete_msg)
-                time.sleep(0.5)
+            except Exception as e:
+                print(f"[AudioIO] ❌ TTS 에러: {e}")
 
     finally:
         _busy = False
@@ -327,7 +300,9 @@ def _on_wake_detected(keyword: str):
 @app.on_event("startup")
 def on_startup():
     global wake_thread
+
     print("[AudioIO] FastAPI startup")
+
     mic.open_stream()
     wake.init_model()
 
@@ -359,14 +334,7 @@ def health_check():
 
 @app.get("/last_wakeup")
 def last_wakeup():
-    """
-    마지막으로 wakeword가 감지되었는지 확인.
-    (아주 단순한 플래그; 나중에는 timestamp나 카운터로 확장 가능)
-    """
-    global _last_wakeup_flag
-    flag = _last_wakeup_flag
-    _last_wakeup_flag = False
-    return {"detected": flag}
+    return {"last_wakeup": _last_wakeup_flag}
 
 
 @app.post("/record_wav")
