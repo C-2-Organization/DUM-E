@@ -31,6 +31,7 @@ tts = TTS()
 
 wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
+_busy = False
 
 _robot_proc: subprocess.Popen | None = None
 
@@ -190,132 +191,109 @@ def _on_wake_detected(keyword: str):
     여기서 STT를 동기적으로 실행하고,
     플래너 → ROS 실행까지 처리한다.
     """
-    global _last_wakeup_flag, wake_thread
+    global _last_wakeup_flag, _busy
+
+    if _busy:
+        print(f"[AudioIO] ⚠ 이미 명령 처리 중이므로 이번 wakeword('{keyword}')는 무시합니다.")
+        return
+
+    _busy = True
+
     print(f"[AudioIO] >>> WAKE WORD DETECTED! ({keyword}) STT 시작")
     _last_wakeup_flag = True
 
-    # wakeword loop 종료 (STT/로봇 동작 동안은 잠시 쉬게)
-    wake.running = False
-
     try:
-        wake_msg = random.choice(WAKE_RESPONSES)
-        print(f"[AudioIO] 💬 Wake response: {wake_msg}")
-        tts.speak(wake_msg)
+        try:
+            wake_msg = random.choice(WAKE_RESPONSES)
+            print(f"[AudioIO] 💬 Wake response: {wake_msg}")
+            tts.speak(wake_msg)
+            time.sleep(1.0)
+        except Exception as e:
+            print(f"[AudioIO] ❌ TTS 에러 (wake response): {e}")
+
+        # 1) STT 실행 (blocking)
+        user_text = stt.listen_and_transcribe()
+        print(f"[AudioIO] 🎙 사용자가 말한 내용: '{user_text}'")
+
+        if not user_text.strip():
+            print("[AudioIO] ⚠ STT 결과가 비어있음. 다시 대기.")
+            return
+
+        ack_msg = random.choice(COMMAND_ACK_RESPONSES)
+        print(f"[AudioIO] 💬 Command ack: {ack_msg}")
+        tts.speak(ack_msg)
         time.sleep(1.0)
-    except Exception as e:
-        print(f"[AudioIO] ❌ TTS 에러 (wake response): {e}")
 
-    # 1) STT 실행 (blocking)
-    user_text = stt.listen_and_transcribe()
-    print(f"[AudioIO] 🎙 사용자가 말한 내용: '{user_text}'")
+        # 로봇 깨우기 전용 명령인지 먼저 체크
+        if _is_robot_wakeup_command(user_text):
+            print("[AudioIO] 🤖 로봇 깨우기 명령으로 인식됨")
 
-    if not user_text.strip():
-        print("[AudioIO] ⚠ STT 결과가 비어있음. 다시 대기.")
-        # 바로 다시 wakeword 루프 재시작
-        wake_thread = threading.Thread(
-            target=start_wakeword_loop,
-            args=(wake, _on_wake_detected, 0.0),
-            daemon=True,
-        )
-        wake_thread.start()
-        return
-
-    ack_msg = random.choice(COMMAND_ACK_RESPONSES)
-    print(f"[AudioIO] 💬 Command ack: {ack_msg}")
-    tts.speak(ack_msg)
-    time.sleep(1.0)
-
-    # 로봇 깨우기 전용 명령인지 먼저 체크
-    if _is_robot_wakeup_command(user_text):
-        print("[AudioIO] 🤖 로봇 깨우기 명령으로 인식됨")
-
-        started = _launch_robot_bringup()
-        try:
-            if started:
-                # 로봇이 꺼져 있었다 → 새로 켜는 중
-                tts.speak("Waking up dummy")
-            else:
-                # 이미 켜져 있거나 실행 실패
-                if _is_robot_already_running():
-                    tts.speak("Dummy is already running.")
-                else:
-                    tts.speak("There was a problem waking up dummy. Please try again later.")
-        except Exception as e:
-            print(f"[AudioIO] ❌ TTS 에러: {e}")
-
-        # 다시 wakeword 루프 재시작
-        wake_thread = threading.Thread(
-            target=start_wakeword_loop,
-            args=(wake, _on_wake_detected, 0.0),
-            daemon=True,
-        )
-        wake_thread.start()
-        return
-
-    # 2) Planner 호출: 자연어 → 스킬 플로우(JSON)
-    try:
-        plan = plan_skill_flow(user_text)
-    except Exception as e:
-        print(f"[AudioIO] ❌ Planner 에러: {e}")
-        try:
-            tts.speak("I'm having a trouble while I'm organizing the process. Please try again later, sir.")
-        except Exception as tts_err:
-            print(f"[AudioIO] ❌ TTS 에러: {tts_err}")
-
-        # 다시 wakeword 루프 재시작
-        wake_thread = threading.Thread(
-            target=start_wakeword_loop,
-            args=(wake, _on_wake_detected, 0.0),
-            daemon=True,
-        )
-        wake_thread.start()
-        return
-
-    print("[AudioIO] 🧠 Planner 결과:")
-    print(plan)
-
-    can_execute = bool(plan.get("can_execute_now"))
-    user_message = plan.get("user_message") or ""
-
-    if not can_execute:
-        # 3-A) 현재 스킬셋으로는 수행 불가능한 명령
-        msg = user_message or "Process execution failed."
-        print(f"[AudioIO] ❌ Process execution failed: {msg}")
-
-        try:
-            tts.speak(msg)
-        except Exception as e:
-            print(f"[AudioIO] ❌ TTS 에러: {e}")
-
-    else:
-        # 3-B) 수행 가능한 경우 → 실제 ROS 스킬 실행
-        executed = _execute_plan(plan)
-
-        if not executed:
-            # 계획 상으로는 can_execute_now=True 인데,
-            # 우리가 실제로 지원하는 스킬이 없거나 실행 실패한 경우
-            fallback_msg = (
-                user_message
-                or "Process execution failed."
-            )
-            print(f"[AudioIO] ⚠ 계획은 가능하다고 했지만 실제 실행 실패: {fallback_msg}")
+            started = _launch_robot_bringup()
             try:
-                tts.speak(fallback_msg)
+                if started:
+                    # 로봇이 꺼져 있었다 → 새로 켜는 중
+                    tts.speak("Waking up dummy")
+                else:
+                    # 이미 켜져 있거나 실행 실패
+                    if _is_robot_already_running():
+                        tts.speak("Dummy is already running.")
+                    else:
+                        tts.speak("There was a problem waking up dummy. Please try again later.")
             except Exception as e:
                 print(f"[AudioIO] ❌ TTS 에러: {e}")
-        else:
-            # 정책상: 성공 시에는 조용히 동작만 할 수도 있고,
-            # 간단한 안내를 음성으로 줄 수도 있다.
-            # 지금 요구사항은 "실행할 수 없는 경우에만 TTS"라서 여기서는 말하지 않음.
-            print("[AudioIO] ✅ 플랜 실행 완료 (TTS는 생략)")
+            return
 
-    # 4) 끝나면 다시 wakeword 루프 재시작
-    wake_thread = threading.Thread(
-        target=start_wakeword_loop,
-        args=(wake, _on_wake_detected, 0.0),
-        daemon=True,
-    )
-    wake_thread.start()
+        # 2) Planner 호출: 자연어 → 스킬 플로우(JSON)
+        try:
+            plan = plan_skill_flow(user_text)
+        except Exception as e:
+            print(f"[AudioIO] ❌ Planner 에러: {e}")
+            try:
+                tts.speak("I'm having a trouble while I'm organizing the process. Please try again later, sir.")
+            except Exception as tts_err:
+                print(f"[AudioIO] ❌ TTS 에러: {tts_err}")
+            return
+
+        print("[AudioIO] 🧠 Planner 결과:")
+        print(plan)
+
+        can_execute = bool(plan.get("can_execute_now"))
+        user_message = plan.get("user_message") or ""
+
+        if not can_execute:
+            # 3-A) 현재 스킬셋으로는 수행 불가능한 명령
+            msg = user_message or "Process execution failed."
+            print(f"[AudioIO] ❌ Process execution failed: {msg}")
+
+            try:
+                tts.speak(msg)
+            except Exception as e:
+                print(f"[AudioIO] ❌ TTS 에러: {e}")
+
+        else:
+            # 3-B) 수행 가능한 경우 → 실제 ROS 스킬 실행
+            executed = _execute_plan(plan)
+
+            if not executed:
+                # 계획 상으로는 can_execute_now=True 인데,
+                # 우리가 실제로 지원하는 스킬이 없거나 실행 실패한 경우
+                fallback_msg = (
+                    user_message
+                    or "Process execution failed."
+                )
+                print(f"[AudioIO] ⚠ 계획은 가능하다고 했지만 실제 실행 실패: {fallback_msg}")
+                try:
+                    tts.speak(fallback_msg)
+                except Exception as e:
+                    print(f"[AudioIO] ❌ TTS 에러: {e}")
+            else:
+                # 정책상: 성공 시에는 조용히 동작만 할 수도 있고,
+                # 간단한 안내를 음성으로 줄 수도 있다.
+                # 지금 요구사항은 "실행할 수 없는 경우에만 TTS"라서 여기서는 말하지 않음.
+                print("[AudioIO] ✅ 플랜 실행 완료 (TTS는 생략)")
+
+    finally:
+        _busy = False
 
 
 @app.on_event("startup")
@@ -331,6 +309,7 @@ def on_startup():
         daemon=True,
     )
     wake_thread.start()
+    print("[AudioIO] ✅ Wakeword loop started")
 
 
 @app.on_event("shutdown")
