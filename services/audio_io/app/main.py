@@ -35,6 +35,19 @@ _busy = False
 
 _robot_proc: subprocess.Popen | None = None
 
+GREETING_RESPONSES = [
+    "Systems online, sir. Standing by for your command.",
+    "Initialization complete. Ready when you are, sir.",
+    "All systems functional. How may I assist, sir?",
+    "Wakeword monitoring activated. I'm here, sir.",
+    "Operational and awaiting your direction, sir.",
+    "Diagnostics clear. At your service, sir.",
+    "Startup sequence complete. Listening now, sir.",
+    "Good day, sir. Ready for deployment.",
+    "Everything’s set. Please proceed when ready, sir.",
+    "Full system readiness achieved. How can I help, sir?",
+]
+
 WAKE_RESPONSES = [
     "Yes, sir?",
     "At your service, sir.",
@@ -49,6 +62,8 @@ WAKE_RESPONSES = [
 ]
 
 COMMAND_ACK_RESPONSES = [
+    "I'm on it, sir.",
+    "For you, Sir, Always.",
     "Understood, sir. Executing now.",
     "Right away, sir.",
     "As you command, sir.",
@@ -69,6 +84,19 @@ COMMAND_ACK_RESPONSES = [
     "Command priority elevated. Executing.",
     "Very well, sir. Activating sequence.",
     "All systems aligned. Carrying out your request.",
+]
+
+COMPLETE_RESPONSES = [
+    "Task completed, sir.",
+    "Operation successful. Anything else you require?",
+    "The process has finished, sir.",
+    "Execution complete. Awaiting further instructions.",
+    "Mission accomplished, sir.",
+    "Your request has been fulfilled.",
+    "All done, sir. Ready for the next task.",
+    "The action has been carried out successfully.",
+    "Procedure finalized, sir.",
+    "Complete. Standing by for your next command.",
 ]
 
 def _is_robot_wakeup_command(text: str) -> bool:
@@ -287,10 +315,10 @@ def _on_wake_detected(keyword: str):
                 except Exception as e:
                     print(f"[AudioIO] ❌ TTS 에러: {e}")
             else:
-                # 정책상: 성공 시에는 조용히 동작만 할 수도 있고,
-                # 간단한 안내를 음성으로 줄 수도 있다.
-                # 지금 요구사항은 "실행할 수 없는 경우에만 TTS"라서 여기서는 말하지 않음.
-                print("[AudioIO] ✅ 플랜 실행 완료 (TTS는 생략)")
+                complete_msg = random.choice(COMPLETE_RESPONSES)
+                print("[AudioIO] ✅ Plan execution complete: {complete_msg}")
+                tts.speak(complete_msg)
+                time.sleep(0.5)
 
     finally:
         _busy = False
@@ -309,6 +337,11 @@ def on_startup():
         daemon=True,
     )
     wake_thread.start()
+
+    greeting_msg = random.choice(GREETING_RESPONSES)
+    print(f"[AudioIO] 💬 Greeting: {greeting_msg}")
+    tts.speak(greeting_msg)
+    time.sleep(0.5)
     print("[AudioIO] ✅ Wakeword loop started")
 
 
