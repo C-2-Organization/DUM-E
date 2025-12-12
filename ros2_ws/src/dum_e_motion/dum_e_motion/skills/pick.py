@@ -69,6 +69,23 @@ def execute_pick_motion(ctx: MotionContext, x, y, z):
         ra=DR_MV_RA_DUPLICATE,
     )
 
+# ------------------------------------------------------------------
+# Pick service call example
+# ------------------------------------------------------------------
+# ros2 service call /run_skill dum_e_interfaces/srv/RunSkill "{
+#   command: {
+#     skill_type: 0,
+#     object_name: 'scissors',
+#     target_pose: {
+#       header: {frame_id: ''},
+#       pose: {
+#         position: {x: 0.0, y: 0.0, z: 0.0},
+#         orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+#       }
+#     },
+#     params_json: ''
+#   }
+# }"
 
 def run_pick_skill(
     cmd: SkillCommand,

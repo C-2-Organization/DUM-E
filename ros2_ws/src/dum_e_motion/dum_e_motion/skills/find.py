@@ -55,6 +55,24 @@ def execute_find_scan_step(ctx: MotionContext, step_idx: int):
         ra=DR_MV_RA_DUPLICATE,
     )
 
+# ------------------------------------------------------------------
+# Find service call example
+# ------------------------------------------------------------------
+# ros2 service call /run_skill dum_e_interfaces/srv/RunSkill "{
+#   command: {
+#     skill_type: 1,
+#     object_name: 'scissors',
+#     target_pose: {
+#       header: {frame_id: ''},
+#       pose: {
+#         position: {x: 0.0, y: 0.0, z: 0.0},
+#         orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+#       }
+#     },
+#     params_json: '{\"max_search_time\": 20.0, \"scan_interval\": 0.5}'
+#   }
+# }"
+
 def run_find_skill(
     cmd: SkillCommand,
     ctx: MotionContext,
