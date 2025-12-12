@@ -29,7 +29,7 @@ class StreamingSTT:
         chunk_duration: float = 0.5,   # 한 번에 0.5초씩 읽기
         silence_sec: float = 2.0,      # 2초 이상 조용하면 종료
         max_total_sec: float = 60.0,   # 안전장치: 최대 60초까지만 듣기
-        energy_threshold: float = 2000,  # 기본 에너지 기준 (ambient 기반으로 보정됨)
+        energy_threshold: float = 200, # 이 값 이상이면 '사람이 말하는 중'이라고 간주
     ):
         api_key = get_env("OPENAI_API_KEY")
         if not api_key:

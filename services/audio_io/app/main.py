@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import random
 import time
+import json
 
 ROOT = Path(__file__).resolve().parents[3]  # /home/rokey/DUM-E
 if str(ROOT) not in sys.path:
@@ -100,7 +101,6 @@ COMPLETE_RESPONSES = [
     "Process completed without issues, sir.",
 ]
 
-
 def _is_robot_already_running() -> bool:
     """
     이미 ros2 launch가 떠 있는지 간단히 체크.
@@ -192,7 +192,6 @@ def _execute_plan(plan: dict) -> bool:
             continue
 
     return executed_any
-
 
 def _on_wake_detected(keyword: str):
     """
