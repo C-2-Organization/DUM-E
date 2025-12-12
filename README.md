@@ -1,4 +1,4 @@
-# DRIP COFFEE MAKER
+# DUM-E
 
 (Introduction)
 
@@ -32,20 +32,27 @@ sudo apt install -y build-essential cmake python3-colcon-common-extensions pytho
 
 ```bash
 git clone https://github.com/C-2-Organization/DUM-E.git
-cd DUM-E
+cd ~/DUM-E
 ```
 
-### ROS2
+### Install dependencies
 
-1. Install dependency
+```bash
+cd ~/DUM-E
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-    ```bash
-    cd ros2_ws
-    mkdir -p src
-    vcs import src < ros2_ws.repos
-    ```
+```bash
+cd ~/DUM-E/ros2_ws
+vcs import src < ros2_ws.repos
+```
 
-2. Build
+### Build & Run ROS2 Packages
+
+1. Build
 
     ```bash
     cd ros2_ws
@@ -53,12 +60,30 @@ cd DUM-E
     source install/setup.bash
     ```
 
-3. Connenct to robot
+2. Run Jarvis & Dummy
+
+    You can run Jarvis & Dummy by running the following commands.
 
     ```bash
-    # virtual mode
-    ros2 launch  dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=virtual host:=127.0.0.1 port:=12345 model:=m0609
+    # Jarvis
+    cd ~/DUM-E/services/audio_io
+    uvicorn app.main:app --reload
 
-    # real mode
-    ros2 launch  dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=real  host:=192.168.1.100 port:=12345 model:=m0609
+    # Dummy
+    ros2 launch dum_e_bringup dum_e_bringup.launch.py
     ```
+
+    *You can also run Dummy with your voice command (such as "Wake up Dummy" or "Wake up robot") via Jarvis.*
+
+
+3. Connenct to robot manually
+
+    If you want to connect to robot manually, run one of the following commands.
+
+        ```bash
+        # virtual mode
+        ros2 launch  dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=virtual host:=127.0.0.1 port:=12345 model:=m0609
+
+        # real mode
+        ros2 launch  dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=real  host:=192.168.1.100 port:=12345 model:=m0609
+        ```
