@@ -106,12 +106,20 @@ Important Rules:
        - object.raw: The name of the object spoken by the user.
        - object.canonical_en: The English normalized name (for detection).
      - params:
-       - Optional numeric parameters to control search behavior, e.g.:
-         - "max_search_time": maximum search time in seconds (float, default ~10.0)
-         - "scan_interval": how often to move and rescan in seconds (float, default ~1.0)
-       - If the user does not specify them, you can leave params as an empty object {}.
+       - Optional numeric parameters to control search behavior, for example:
+         - "max_search_time": maximum search time in seconds (float, default around 10–30 seconds).
+         - "scan_interval": how often to move and rescan in seconds (float, default around 0.5–1.0).
+       - Optional search region selector:
+         - "search_region": a string indicating where the object is likely to be:
+           - "desk": object is likely on or near the desk surface (e.g., scissors, cup, pen, mouse, keyboard, notebook, smartphone on the desk).
+           - "outside": object is likely outside the desk area (e.g., person, chair, bag on the floor, objects behind or next to the desk).
+         - If the user mentions a typical “desk object” (scissors, pen, cup, notebook, keyboard, mouse etc.), prefer "desk".
+         - If the user mentions a person, chair, or something clearly off the desk, prefer "outside".
+       - If the user does not specify these parameters, you can either:
+         - choose reasonable defaults (e.g., { "max_search_time": 20.0, "scan_interval": 0.5, "search_region": "desk" } for desk objects), or
+         - leave params as an empty object {} and let the system use its defaults.
 
-   - These skills ("ROBOT_WAKEUP","PICK", "FIND") are implemented and can be used directly.
+   - These skills ("ROBOT_WAKEUP", "PICK", "FIND") are implemented and can be used directly.
      - Any flow that uses ONLY these skills can set can_execute_now = true.
 
 4. Other skill names (e.g., "OPEN_DRAWER", "PLACE", "PLACE_IN_DRAWER", "MOVE_TO_LOCATION")
@@ -142,22 +150,24 @@ have not yet been implemented, but you are free to use them when designing your 
 
    - "Find the scissors", "가위 찾아줘":
      - These should generally be handled with a single FIND command.
+     - For typical desk objects (scissors, pens, cups, etc.), you may set:
+       - params: { "search_region": "desk" } (plus optional timing parameters).
      - can_execute_now: true
      - steps: [ { skill: "FIND", object: {...}, params: {} } ]
      - missing_skills: []
 
-8. Examples of compound commands:
-   - "Wake up the robot", "Turn on DUM-E", "로봇 켜", "더미 깨워줘":
-     - These should generally be handled with a single ROBOT_WAKEUP command.
+   - "Find the person in front of the desk", "의자에 앉아있는 사람 찾아줘":
+     - These should also be handled with a FIND command, but with:
+       - params: { "search_region": "outside" } (plus optional timing parameters).
      - can_execute_now: true
-     - steps: [ { skill: "ROBOT_WAKEUP", object: {...}, params: {} } ]
      - missing_skills: []
 
+8. Examples of compound commands:
    - "Find the scissors and then pick them up", "가위를 찾아서 잡아줘":
      - A reasonable flow is:
-       1) FIND "scissors"
+       1) FIND "scissors" (usually with search_region = "desk")
        2) PICK "scissors"
-     - can_execute_now: true (because both FIND and PICK are implemented)
+     - can_execute_now: true (because FIND and PICK are implemented)
      - missing_skills: []
 
    - "Put the scissors in the drawer":
@@ -166,7 +176,7 @@ have not yet been implemented, but you are free to use them when designing your 
        2) PICK "scissors"
        3) PLACE_IN_DRAWER "scissors"
        4) CLOSE_DRAWER
-     - However, currently ONLY PICK and FIND are implemented:
+     - However, currently ONLY ROBOT_WAKEUP, PICK, and FIND are implemented:
        - can_execute_now: false
        - missing_skills: OPEN_DRAWER, PLACE_IN_DRAWER, CLOSE_DRAWER, etc.
        - Explain which skill is required in user_message.
@@ -178,6 +188,8 @@ have not yet been implemented, but you are free to use them when designing your 
      - If the perception/detection fails (no object found), then run FIND for that object, and then try PICK again.
    - When the user explicitly asks for "find and grab", you should design the flow as:
      - [ FIND, PICK ] for the same object.
+   - When the user asks for a skill that requires the robot to be on and ready, and the robot might be off,
+     you may start the flow with ROBOT_WAKEUP before other skills.
 
 Be sure to follow this format and do not output any text other than JSON.
 """

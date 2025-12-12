@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import random
 import time
+import json
 
 ROOT = Path(__file__).resolve().parents[3]  # /home/rokey/DUM-E
 if str(ROOT) not in sys.path:
@@ -174,14 +175,17 @@ def _execute_plan(plan: dict) -> bool:
                 print("[AudioIO] ⚠ PICK 스텝에 object_name 이 없음:", step)
                 continue
 
-            print(f"[AudioIO] 🦾 실행: PICK '{obj_name}'")
+            params = step.get("params") or {}
+            params_json = json.dumps(params, ensure_ascii=False)
+
+            print(f"[AudioIO] 🦾 실행: PICK '{obj_name}', params={params}")
 
             try:
                 resp = call_run_skill(
                     skill_type=SkillCommand.PICK,
                     object_name=obj_name,
                     target_pose=None,
-                    params_json="",
+                    params_json=params_json,
                     timeout_sec=60.0,
                 )
             except Exception as e:
@@ -203,14 +207,17 @@ def _execute_plan(plan: dict) -> bool:
                 print("[AudioIO] ⚠ FIND 스텝에 object_name 이 없음:", step)
                 continue
 
-            print(f"[AudioIO] 🦾 실행: FIND '{obj_name}'")
+            params = step.get("params") or {}
+            params_json = json.dumps(params, ensure_ascii=False)
+
+            print(f"[AudioIO] 🦾 실행: FIND '{obj_name}', params={params}")
 
             try:
                 resp = call_run_skill(
                     skill_type=SkillCommand.FIND,
                     object_name=obj_name,
                     target_pose=None,
-                    params_json="",
+                    params_json=params_json,
                     timeout_sec=60.0,
                 )
             except Exception as e:
@@ -221,6 +228,9 @@ def _execute_plan(plan: dict) -> bool:
                 f"[AudioIO] ✅ /run_skill 응답: success={resp.success}, "
                 f"confidence={resp.confidence:.2f}, message='{resp.message}'"
             )
+
+            executed_any = True
+            break
 
         else:
             print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")

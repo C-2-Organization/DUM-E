@@ -12,16 +12,20 @@ from dum_e_motion.motion_context import MotionContext
 # 이 이상일 때 "찾았다"라고 인정
 FIND_CONF_TH = 0.3
 
-# 스캔 패턴 설정 (deg)
+# 책상 위(inside) 스캔 패턴 설정 (deg)
 SCAN_STEP_DEG = 15.0
 SCAN_MAX_DEG = 60.0
 
 JNT_VEL = 20.0
 JNT_ACC = 120.0
 
-def execute_find_scan_step(ctx: MotionContext, step_idx: int):
+
+# =========================
+# 1) 책상 안쪽(inside) 서치 패턴
+# =========================
+def execute_find_scan_step_desk(ctx: MotionContext, step_idx: int):
     """
-    아주 단순한 스윕 패턴:
+    책상 위에서 쓸 기존 스윕 패턴:
 
       - base joint(j1)를 좌/우로 번갈아가며 회전
       - step_idx:
@@ -31,6 +35,7 @@ def execute_find_scan_step(ctx: MotionContext, step_idx: int):
           3 -> -2*SCAN_STEP_DEG
           ...
       - 최대 각도는 ±SCAN_MAX_DEG로 클램프
+      - J5는 안쪽에서 바깥쪽 방향으로 탐색
     """
     from DSR_ROBOT2 import (
         movej,
@@ -43,7 +48,7 @@ def execute_find_scan_step(ctx: MotionContext, step_idx: int):
     sign = 1 if (step_idx % 2 == 0) else -1  # 짝수: +, 홀수: -
 
     delta_x = sign * k * SCAN_STEP_DEG
-    delta_y =  (-0.5) * SCAN_STEP_DEG
+    delta_y = -0.5 * SCAN_STEP_DEG
 
     target_j = posj(delta_x, 0, 0, 0, delta_y)
 
@@ -54,6 +59,85 @@ def execute_find_scan_step(ctx: MotionContext, step_idx: int):
         mod=DR_MV_MOD_REL,
         ra=DR_MV_RA_DUPLICATE,
     )
+
+
+# =========================
+# 2) 책상 바깥(outside) 서치 패턴
+# =========================
+def execute_find_scan_step_outside(ctx: MotionContext, step_idx: int):
+    """
+    책상 바깥(사람 / 의자 등)을 찾기 위한 패턴.
+
+    요구사항:
+      - 시작 자세: posj(30, -30, 130, 90, 0, 0)
+      - J1을 -90도까지 천천히 마이너스 방향으로 스캔,
+        끝에 도달하면 +30도까지 플러스 방향으로 스캔 (왕복)
+      - 편도 1회(한쪽 끝 → 반대쪽 끝)를 돌 때마다 J2를 -5도씩 더 숙임
+      - J2의 최소각도는 -45도
+
+    구현 방식:
+      - step_idx를 이용해 수학적으로 (J1, J2)를 결정하는 stateless 패턴
+      - 각 step은 ABS movej로 이동
+    """
+    from DSR_ROBOT2 import (
+        movej,
+        posj,
+        DR_MV_MOD_ABS,
+        DR_MV_RA_DUPLICATE,
+    )
+
+    # 한 번의 왕복 라인을 얼마나 쪼갤지 (수평 분해능)
+    H_STEPS = 8  # 수평 방향 step 개수 (원하면 조절 가능)
+
+    j1_min = -90.0
+    j1_max = 30.0
+    width = j1_max - j1_min  # 120deg
+
+    sweep_idx = step_idx // H_STEPS      # 몇 번째 왕복 라인인지 (0,1,2,...)
+    horiz_idx = step_idx % H_STEPS       # 현재 라인에서 몇 번째 수평 포인트인지 (0..H_STEPS-1)
+
+    # 짝수번째 sweep: J1을 +30 → -90 (마이너스 방향)
+    # 홀수번째 sweep: J1을 -90 → +30 (플러스 방향)
+    direction = -1 if (sweep_idx % 2 == 0) else 1
+
+    # 0.0 ~ 1.0 사이 보간 인자
+    t = 0.0
+    if H_STEPS > 1:
+        t = horiz_idx / float(H_STEPS - 1)
+
+    if direction == -1:
+        # +30 → -90
+        j1 = j1_max - width * t
+    else:
+        # -90 → +30
+        j1 = j1_min + width * t
+
+    # J2는 sweep(편도 1회)마다 -5도씩 더 숙임, 최소 -45도
+    j2 = -30.0 - 5.0 * sweep_idx
+    if j2 < -45.0:
+        j2 = -45.0
+
+    # 나머지 관절은 시작자세 기준 유지
+    j3 = 130.0
+    j4 = 90.0
+    j5 = 0.0
+    j6 = 0.0
+
+    target_j = posj(j1, j2, j3, j4, j5, j6)
+
+    ctx.node.get_logger().info(
+        f"[FIND-OUTSIDE] step={step_idx}, sweep={sweep_idx}, horiz={horiz_idx}, "
+        f"j1={j1:.1f}, j2={j2:.1f}"
+    )
+
+    movej(
+        target_j,
+        vel=JNT_VEL,
+        acc=JNT_ACC,
+        mod=DR_MV_MOD_ABS,
+        ra=DR_MV_RA_DUPLICATE,
+    )
+
 
 # ------------------------------------------------------------------
 # Find service call example
@@ -69,9 +153,10 @@ def execute_find_scan_step(ctx: MotionContext, step_idx: int):
 #         orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
 #       }
 #     },
-#     params_json: '{\"max_search_time\": 20.0, \"scan_interval\": 0.5}'
+#     params_json: '{\"max_search_time\": 20.0, \"scan_interval\": 0.5, \"search_region\": \"outside\"}'
 #   }
 # }"
+
 
 def run_find_skill(
     cmd: SkillCommand,
@@ -81,14 +166,15 @@ def run_find_skill(
     FIND 스킬:
 
       - object_name에 대해 get_object_pose()를 반복 호출
-      - 디텍션 안 되면 스윕 모션(예: base joint 좌우 회전) 수행
+      - 디텍션 안 되면 스윕 모션(책상 안/밖 패턴 중 하나) 수행
       - conf >= FIND_CONF_TH 인 디텍션이 나오면 그 즉시 성공 반환
       - 포즈는 여기서 안 쓰고, 다음 스킬(Pick 등)에서 다시 perception 호출해서 쓰도록 설계
 
     params_json 예시:
       {
-        "max_search_time": 10.0,   # seconds (default 10)
-        "scan_interval": 1.0       # seconds, 모션 스텝 간격 (default 1)
+        "max_search_time": 10.0,         # seconds (default 30)
+        "scan_interval": 1.0,           # seconds, 모션 스텝 간격
+        "search_region": "desk" | "outside"  # 탐색 영역 (기본값: "desk")
       }
 
     return:
@@ -111,8 +197,9 @@ def run_find_skill(
         return False, msg, 0.0, PoseStamped()
 
     # 기본 파라미터
-    max_search_time = 10.0
+    max_search_time = 30.0
     scan_interval = 1.0
+    search_region = "desk"   # "desk" | "outside"
 
     # params_json 파싱
     if params_json:
@@ -120,9 +207,11 @@ def run_find_skill(
             params = json.loads(params_json)
             max_search_time = float(params.get("max_search_time", max_search_time))
             scan_interval = float(params.get("scan_interval", scan_interval))
+            search_region = params.get("search_region", search_region)
             ctx.node.get_logger().info(
                 f"[FIND] params: max_search_time={max_search_time}, "
-                f"scan_interval={scan_interval}"
+                f"scan_interval={scan_interval}, "
+                f"search_region={search_region}"
             )
         except json.JSONDecodeError:
             ctx.node.get_logger().warn(
@@ -131,21 +220,26 @@ def run_find_skill(
 
     ctx.node.get_logger().info(
         f"[FIND] skill 실행: object_name='{object_name}', "
-        f"max_search_time={max_search_time}s"
+        f"max_search_time={max_search_time}s, "
+        f"search_region={search_region}"
     )
 
     start_time = time.time()
     last_scan_time = start_time - scan_interval  # 시작하자마자 한 번 움직이게
     step_idx = 0
 
-    START_POSE = posj(0.0, 0.0, 90.0, 0.0, 120.0, 90.0)
+    # 시작자세: desk vs outside
+    if search_region == "outside":
+        START_POSE = posj(30.0, -30.0, 130.0, 90.0, 0.0, 0.0)
+    else:
+        START_POSE = posj(0.0, 0.0, 90.0, 0.0, 120.0, 90.0)
 
     movej(
         START_POSE,
         vel=JNT_VEL,
         acc=JNT_ACC,
         mod=DR_MV_MOD_ABS,
-        ra=DR_MV_RA_DUPLICATE
+        ra=DR_MV_RA_DUPLICATE,
     )
 
     while True:
@@ -169,7 +263,6 @@ def run_find_skill(
                 ctx.node.get_logger().info(
                     f"[FIND] object detected: conf={conf:.2f} >= {FIND_CONF_TH:.2f}, 탐색 종료"
                 )
-                # 여기서는 순수하게 "찾았다"만 알리고 포즈는 안 넘김
                 msg = "object found"
                 return True, msg, conf, PoseStamped()
             else:
@@ -183,7 +276,10 @@ def run_find_skill(
                 f"[FIND] scan step {step_idx} (elapsed={elapsed:.1f}s)"
             )
             try:
-                execute_find_scan_step(ctx, step_idx)
+                if search_region == "outside":
+                    execute_find_scan_step_outside(ctx, step_idx)
+                else:
+                    execute_find_scan_step_desk(ctx, step_idx)
             except Exception as e:
                 ctx.node.get_logger().error(f"[FIND] scan step error: {e}")
             step_idx += 1
