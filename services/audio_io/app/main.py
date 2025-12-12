@@ -18,6 +18,7 @@ from .mic import MicController
 from .wakeword import WakeupWord, start_wakeword_loop
 from .stt import StreamingSTT
 from .tts import TTS
+from .jarvis_assistant import JarvisAssistant
 
 from services.llm_agent.app.skill_planner import plan_skill_flow
 from services.llm_agent.ros_bridge import call_run_skill
@@ -28,7 +29,13 @@ app = FastAPI(title="Dummy Audio IO Service")
 mic = MicController(MicConfig())
 wake = WakeupWord(mic)
 stt = StreamingSTT()
-tts = TTS()
+tts = TTS(
+    model="gpt-4o-mini-tts",  # 기본값이라 사실 안 써도 되지만 명시해둘게
+    voice="onyx",             # 제일 저음 보이스
+    effect="jarvis",          # 기계음 + 자비스 느낌 DSP 필터 ON
+)
+tts.set_voice("onyx")   # 시작할 때 한 번만 호출해도 됨
+jarvis = JarvisAssistant(tts=tts)
 
 wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
@@ -56,6 +63,10 @@ WAKE_RESPONSES = [
     "I'm listening, sir.",
     "Ready when you are.",
     "Standing by, sir.",
+    "Awaiting your command.",
+    "What can I do for you, sir?",
+    "Online and attentive, sir.",
+    "Yes, I'm here.",
     "Go ahead, sir.",
     "Online and awaiting orders.",
     "Here, sir.",
@@ -264,7 +275,7 @@ def _on_wake_detected(keyword: str):
             print(f"[AudioIO] ❌ TTS 에러 (wake response): {e}")
 
         # 1) STT 실행 (blocking)
-        user_text = stt.listen_and_transcribe()
+        user_text = stt.transcribe_once()
         print(f"[AudioIO] 🎙 사용자가 말한 내용: '{user_text}'")
 
         if not user_text.strip():
@@ -282,7 +293,11 @@ def _on_wake_detected(keyword: str):
         except Exception as e:
             print(f"[AudioIO] ❌ Planner 에러: {e}")
             try:
-                tts.speak("I'm having a trouble while I'm organizing the process. Please try again later, sir.")
+                # 자비스 스타일로 사과 + 재시도 안내
+                jarvis.reply_and_speak(
+                    "A system issue occurred while organizing the internal task sequence. "
+                    "Please apologize to the user in a concise and respectful manner, and inform them to try again shortly."
+                )
             except Exception as tts_err:
                 print(f"[AudioIO] ❌ TTS 에러: {tts_err}")
             return
