@@ -34,6 +34,10 @@ def execute_pick_motion(ctx: MotionContext, x, y, z):
 
     current_pos = get_current_posx()[0]
 
+    # 그리퍼 오픈
+    ctx.gripper.open_gripper()
+    wait(1)
+
     approach_pos = posx([
         x,
         y,
