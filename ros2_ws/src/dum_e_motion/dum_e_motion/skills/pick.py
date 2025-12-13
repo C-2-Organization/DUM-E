@@ -19,9 +19,6 @@ def execute_pick_motion(ctx: MotionContext, x, y, z):
     접근 → 잡기 → 홈
     """
     from DSR_ROBOT2 import (
-        movej,
-        movel,
-        wait,
         DR_MV_MOD_ABS,
         DR_MV_RA_DUPLICATE,
         get_current_posx,
@@ -35,8 +32,8 @@ def execute_pick_motion(ctx: MotionContext, x, y, z):
     current_pos = get_current_posx()[0]
 
     # 그리퍼 오픈
-    ctx.gripper.open_gripper()
-    wait(1)
+    ctx.motion.open_gripper()
+    ctx.motion.wait(1)
 
     approach_pos = posx([
         x,
@@ -48,7 +45,7 @@ def execute_pick_motion(ctx: MotionContext, x, y, z):
     ])
 
     # 접근
-    movel(
+    ctx.motion.movel(
         approach_pos,
         vel=ctx.LIN_VEL,
         acc=ctx.LIN_ACC,
@@ -57,11 +54,11 @@ def execute_pick_motion(ctx: MotionContext, x, y, z):
     )
 
     # 집기
-    ctx.gripper.close_gripper()
-    wait(1)
+    ctx.motion.close_gripper()
+    ctx.motion.wait(1)
 
     # 홈으로
-    movej(
+    ctx.motion.movej(
         ctx.CUSTOM_HOME_JOINT,
         vel=ctx.JNT_VEL,
         acc=ctx.JNT_ACC,

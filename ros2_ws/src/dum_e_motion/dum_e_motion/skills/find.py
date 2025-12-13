@@ -7,7 +7,7 @@ from typing import Tuple
 from geometry_msgs.msg import PoseStamped
 
 from dum_e_interfaces.msg import SkillCommand
-from dum_e_motion.motion_context import MotionContext
+from dum_e_motion.motion_context import MotionContext, MotionCancelled
 
 # 이 이상일 때 "찾았다"라고 인정
 FIND_CONF_TH = 0.3
@@ -38,11 +38,14 @@ def execute_find_scan_step_desk(ctx: MotionContext, step_idx: int):
       - J5는 안쪽에서 바깥쪽 방향으로 탐색
     """
     from DSR_ROBOT2 import (
-        movej,
         posj,
         DR_MV_MOD_REL,
         DR_MV_RA_DUPLICATE,
     )
+
+    if ctx.is_cancelled():
+        ctx.node.get_logger().warn("[FIND-DESK] cancel detected before scan step")
+        raise MotionCancelled("Cancelled before desk scan step")
 
     k = step_idx // 2 + 1
     sign = 1 if (step_idx % 2 == 0) else -1  # 짝수: +, 홀수: -
@@ -52,7 +55,7 @@ def execute_find_scan_step_desk(ctx: MotionContext, step_idx: int):
 
     target_j = posj(delta_x, 0, 0, 0, delta_y)
 
-    movej(
+    ctx.motion.movej(
         target_j,
         vel=JNT_VEL,
         acc=JNT_ACC,
@@ -80,11 +83,14 @@ def execute_find_scan_step_outside(ctx: MotionContext, step_idx: int):
       - 각 step은 ABS movej로 이동
     """
     from DSR_ROBOT2 import (
-        movej,
         posj,
         DR_MV_MOD_ABS,
         DR_MV_RA_DUPLICATE,
     )
+
+    if ctx.is_cancelled():
+        ctx.node.get_logger().warn("[FIND-OUTSIDE] cancel detected before scan step")
+        raise MotionCancelled("Cancelled before outside scan step")
 
     # 한 번의 왕복 라인을 얼마나 쪼갤지 (수평 분해능)
     H_STEPS = 8  # 수평 방향 step 개수 (원하면 조절 가능)
@@ -130,7 +136,7 @@ def execute_find_scan_step_outside(ctx: MotionContext, step_idx: int):
         f"j1={j1:.1f}, j2={j2:.1f}"
     )
 
-    movej(
+    ctx.motion.movej(
         target_j,
         vel=JNT_VEL,
         acc=JNT_ACC,
@@ -182,7 +188,6 @@ def run_find_skill(
       - final_pose: Find는 "자세 찾기" 용이라 여기서는 빈 PoseStamped() 반환
     """
     from DSR_ROBOT2 import (
-        movej,
         posj,
         DR_MV_MOD_ABS,
         DR_MV_RA_DUPLICATE,
@@ -224,6 +229,9 @@ def run_find_skill(
         f"search_region={search_region}"
     )
 
+    if ctx.is_cancelled():
+        raise MotionCancelled("Cancelled before FIND start")
+
     start_time = time.time()
     last_scan_time = start_time - scan_interval  # 시작하자마자 한 번 움직이게
     step_idx = 0
@@ -234,7 +242,10 @@ def run_find_skill(
     else:
         START_POSE = posj(0.0, 0.0, 90.0, 0.0, 120.0, 90.0)
 
-    movej(
+    if ctx.is_cancelled():
+        raise MotionCancelled("Cancelled before moving to START_POSE")
+
+    ctx.motion.movej(
         START_POSE,
         vel=JNT_VEL,
         acc=JNT_ACC,
@@ -243,6 +254,10 @@ def run_find_skill(
     )
 
     while True:
+        if ctx.is_cancelled():
+            ctx.node.get_logger().warn("[FIND] cancel flag detected, aborting FIND")
+            raise MotionCancelled("FIND cancelled by user request")
+
         now = time.time()
         elapsed = now - start_time
 
@@ -254,6 +269,9 @@ def run_find_skill(
             )
             ctx.node.get_logger().warn(msg)
             return False, msg, 0.0, PoseStamped()
+
+        if ctx.is_cancelled():
+            raise MotionCancelled("Cancelled before get_object_pose")
 
         # 2) 현재 자세에서 object pose 시도
         pose_resp = ctx.request_object_pose(object_name)
@@ -269,6 +287,9 @@ def run_find_skill(
                 ctx.node.get_logger().info(
                     f"[FIND] detected but conf={conf:.2f} < TH={FIND_CONF_TH:.2f}, 계속 탐색"
                 )
+
+        if ctx.is_cancelled():
+            raise MotionCancelled("Cancelled before get_object_pose")
 
         # 3) 스윕 모션: 일정 시간마다 한 스텝씩 자세 변경
         if now - last_scan_time >= scan_interval:
@@ -287,3 +308,6 @@ def run_find_skill(
 
         # 4) 너무 바쁘게 돌지 않게 조금 쉼
         time.sleep(0.1)
+        if ctx.is_cancelled():
+            ctx.node.get_logger().warn("[FIND] cancel during sleep")
+            raise MotionCancelled("FIND cancelled during sleep")

@@ -157,6 +157,44 @@ def _launch_robot_bringup() -> bool:
         _robot_proc = None
         return False
 
+STOP_KEYWORDS_KO = ["멈춰", "잠깐", "스톱", "그만", "정지", "잠만", "기다려"]
+STOP_KEYWORDS_EN = ["stop", "pause", "hold on", "wait"]
+
+def _is_stop_command(text: str) -> bool:
+    lower = text.lower()
+    return any(k in lower for k in STOP_KEYWORDS_EN) or any(k in text for k in STOP_KEYWORDS_KO)
+
+def _request_skill_stop():
+    """
+    현재 실행 중인 스킬/모션을 중단해달라는 요청을 ROS 쪽으로 보낸다.
+    """
+    print("[AudioIO] 🛑 STOP 요청을 ROS로 전송합니다.")
+
+    try:
+        cmd = [
+            "ros2", "topic", "pub",
+            "/dum_e_control",
+            "std_msgs/String",
+            "data: 'stop'",
+            "-r", "10",
+        ]
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        time.sleep(3.0)
+        proc.terminate()
+    except subprocess.CalledProcessError as e:
+        print(f"[AudioIO] ❌ STOP topic publish 실패: {e}")
+        tts.speak("I attempted to stop the operation, but something went wrong, sir.")
+    except Exception as e:
+        print(f"[AudioIO] ❌ STOP 호출 중 에러: {e}")
+        tts.speak("I could not send a proper stop command to the robot, sir.")
+
+
 def _execute_plan(plan: dict) -> bool:
     """
     planner가 만들어준 JSON(plan)을 보고 실제 ROS 스킬을 실행한다.
@@ -180,7 +218,7 @@ def _execute_plan(plan: dict) -> bool:
             started = _launch_robot_bringup()
             try:
                 if started:
-                    tts.speak("Waking up dummy, sir.")
+                    tts.speak("Initializing system.")
                 else:
                     if _is_robot_already_running():
                         tts.speak("Dummy is already running, sir.")
@@ -345,7 +383,7 @@ def _run_single_command_flow(
                 )
                 print(f"[AudioIO] ⚠ 계획은 가능하다고 했지만 실제 실행 실패: {fallback_msg}")
                 try:
-                    tts.speak(fallback_msg)
+                    tts.speak("Process execution failed.")
                 except Exception as e:
                     print(f"[AudioIO] ❌ TTS 에러: {e}")
             else:
@@ -383,10 +421,24 @@ def _on_space_pressed():
     def is_active():
         return _push_to_talk_active
 
-    # push-to-talk에서는 굳이 "I'm listening" 같은 프리페이스는 안 해도 됨
+    user_text = stt.transcribe_while(is_active)
+    print(f"[AudioIO] (PTT) 🎙 사용자가 말한 내용: '{user_text}'")
+
+    if not user_text.strip():
+        print("[AudioIO] (PTT) ⚠ STT 결과가 비어있음. 무시.")
+        return
+
+    if _is_stop_command(user_text):
+        print("[AudioIO] (PTT) 🛑 STOP 계열 명령 감지")
+        _request_skill_stop()
+        return
+
+    def _return_existing_text():
+        return user_text
+
     _run_single_command_flow(
         preface_msg=None,
-        transcribe_fn=lambda: stt.transcribe_while(is_active),
+        transcribe_fn=_return_existing_text,
     )
 
 
