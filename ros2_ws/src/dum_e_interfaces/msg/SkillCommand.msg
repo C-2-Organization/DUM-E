@@ -2,7 +2,7 @@
 
 uint8 PICK=0
 uint8 FIND=1
-# uint8 SHAKE=2
+uint8 HOME=2
 # uint8 HANDOVER_TO_USER=3
 # ...
 

@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find
+from dum_e_motion.skills import pick, find, home
 
 ROBOT_ID = "dsr01"
 
@@ -175,6 +175,19 @@ class SkillManagerNode(Node):
                 success, message, confidence, final_pose = find.run_find_skill(
                     cmd, self.ctx
                 )
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = final_pose
+                return response
+
+            elif cmd.skill_type == SkillCommand.HOME:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: HOME, 기본 자세로 돌아갑니다."
+                )
+
+                success, message, confidence, final_pose = home.run_home_skill(self.ctx)
 
                 response.success = success
                 response.message = message
