@@ -131,7 +131,21 @@ Important Rules:
          - choose reasonable defaults (e.g., { "max_search_time": 20.0, "scan_interval": 0.5, "search_region": "desk" } for desk objects), or
          - leave params as an empty object {} and let the system use its defaults.
 
-   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND") are implemented and can be used directly.
+   - "DROP": Opens the gripper to release (drop) any object currently being held, without moving the arm.
+     - This is used when the user asks to "drop", "release", "let go", or "open the gripper" to let the held object fall.
+     - Typical usage examples:
+       - "Drop it", "Release it", "Let go", "Open the gripper", "Let it fall"
+       - "떨어뜨려", "놔", "손 펴", "그리퍼 열어", "놓아줘", "잡은 거 놔"
+     - This skill assumes the robot is already holding something (or the gripper is closed).
+       - If the user says "drop the scissors" but there is no state confirmation, still plan DROP (no object needed).
+       - If the user explicitly wants to drop it somewhere specific (e.g., "drop it in the trash"),
+         you must propose missing skills like MOVE_TO_LOCATION / PLACE and set can_execute_now = false.
+     - params:
+       - Usually an empty object: {}
+     - object:
+       - Not required for DROP. Set object.raw and object.canonical_en to null.
+
+   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP") are implemented and can be used directly.
      - Any flow that uses ONLY these skills can set can_execute_now = true.
 
 4. Other skill names (e.g., "OPEN_DRAWER", "PLACE", "PLACE_IN_DRAWER", "MOVE_TO_LOCATION")
@@ -177,6 +191,11 @@ have not yet been implemented, but you are free to use them when designing your 
      - These should also be handled with a FIND command, but with:
        - params: { "search_region": "outside" } (plus optional timing parameters).
      - can_execute_now: true
+     - missing_skills: []
+
+   - "Drop it", "Release it", "놓아줘", "떨어뜨려":
+     - can_execute_now: true
+     - steps: [ { skill: "DROP", object: { "raw": null, "canonical_en": null }, params: {} } ]
      - missing_skills: []
 
 8. Examples of compound commands:

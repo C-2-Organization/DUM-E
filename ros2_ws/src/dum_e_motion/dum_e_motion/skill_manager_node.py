@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find, home
+from dum_e_motion.skills import pick, find, home, drop
 
 ROBOT_ID = "dsr01"
 
@@ -193,6 +193,19 @@ class SkillManagerNode(Node):
                 response.message = message
                 response.confidence = confidence
                 response.final_pose = final_pose
+                return response
+
+            elif cmd.skill_type == SkillCommand.DROP:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: DROP, 잡고 있는 오브젝트를 떨어뜨립니다."
+                )
+
+                success, message, confidence = drop.run_drop_skill(self.ctx)
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = PoseStamped()
                 return response
 
             else:
