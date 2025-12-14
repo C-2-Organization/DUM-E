@@ -145,10 +145,36 @@ Important Rules:
      - object:
        - Not required for DROP. Set object.raw and object.canonical_en to null.
 
-   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP") are implemented and can be used directly.
+   - "PLACE": Places (releases) the currently held object onto a specified target location.
+     - This skill is typically used after PICK, when the robot is already holding an object.
+     - Typical usage examples:
+       - "Put it on the shelf", "Place it on the desk", "Put this on the table"
+       - "가위 선반에 올려놔", "책상 위에 놔", "집어서 선반에 올려줘"
+     - Typical compound usage:
+       - "선반에 올려놔"
+         → PLACE("shelf")
+       - "Pick up the scissors and put them on the shelf"
+         → PICK("scissors") → PLACE("shelf")
+
+     - Required parameters:
+       - object.raw: The target location spoken by the user (e.g., "shelf", "desk", "table", "선반", "책상")
+       - object.canonical_en: The normalized English name of the target location
+         (e.g., "shelf", "desk", "table")
+
+     - params:
+       - If the user specifies additional constraints (e.g., "gently", "center", "edge"),
+         these may be added later as params when supported.
+
+     - Important constraints:
+       - PLACE assumes the robot is already holding an object.
+       - PLACE does NOT decide *what* object to place; it only places the currently held object.
+       - If the user asks to place an object without first picking it (and no object is held),
+         the ideal flow should include PICK before PLACE.
+
+   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP", "PLACE") are implemented and can be used directly.
      - Any flow that uses ONLY these skills can set can_execute_now = true.
 
-4. Other skill names (e.g., "OPEN_DRAWER", "PLACE", "PLACE_IN_DRAWER", "MOVE_TO_LOCATION")
+4. Other skill names (e.g., "OPEN_DRAWER", "DANCE")
 have not yet been implemented, but you are free to use them when designing your "ideal flow."
    - However, if any of these non-implemented skills are included, can_execute_now must be false.
    - In this case, please specify which skills are needed and why in the missing_skills field.

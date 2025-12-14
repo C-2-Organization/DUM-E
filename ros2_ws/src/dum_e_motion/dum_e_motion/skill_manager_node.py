@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find, home, drop
+from dum_e_motion.skills import pick, find, home, drop, place
 
 ROBOT_ID = "dsr01"
 
@@ -206,6 +206,19 @@ class SkillManagerNode(Node):
                 response.message = message
                 response.confidence = confidence
                 response.final_pose = PoseStamped()
+                return response
+
+            elif cmd.skill_type == SkillCommand.PLACE:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: PLACE, 잡고있는 오브젝트를 지정한 위치에 놓습니다."
+                )
+
+                success, message, confidence, final_pose = place.run_place_skill(cmd, self.ctx)
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = final_pose
                 return response
 
             else:
