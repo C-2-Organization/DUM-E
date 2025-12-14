@@ -83,6 +83,7 @@ doc/_build/
 *.aux
 *.out
 *.toc
+mobileclip_*.ts
 
 ############################
 # Local config / secrets (있다면)
