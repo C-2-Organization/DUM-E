@@ -11,11 +11,16 @@ def build_perception_msg(
     hand_near_target: bool = False,
 ) -> Dict[str, Any]:
     return {
-        "stamp": time.time(),
+        "stamp": 123.45,
         "source": "webcam",
-        "recommended_action": recommended_action,
-        "risk_level": risk_level,
-        "human_present": human_present,
-        "hand_near_target": hand_near_target,
-        "candidates": candidates,  # track_id/conf/hit/center/bbox/in_table_roi/between_holes ...
+        "recommended_action": "look_at",
+        "best": {
+            "track_id": 7,
+            "cls_name": "tool",
+            "conf": 0.31,
+            "hit": 12,
+            "robot_xy": [402.3, -180.1],
+            "between_holes": "4~8번 사이에 있습니다"
+        },
+        "candidates": [...] 
     }

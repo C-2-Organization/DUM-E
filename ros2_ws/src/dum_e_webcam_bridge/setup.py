@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'dum_e_perception_bridge'
+package_name = 'dum_e_webcam_bridge'
 
 setup(
     name=package_name,
@@ -24,7 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            "webcam_receiver = dum_e_perception_bridge.receiver:main",
+            "webcam_receiver = dum_e_webcam_bridge.receiver:main",
+            'webcam_gate = dum_e_webcam_bridge.webcam_gate:main',  # ✅ 추가
         ],
     },
 )

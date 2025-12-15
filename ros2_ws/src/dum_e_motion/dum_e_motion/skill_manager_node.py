@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find
+from dum_e_motion.skills import pick, find, look_at
 
 ROBOT_ID = "dsr01"
 
@@ -63,7 +63,7 @@ class SkillManagerNode(Node):
         # ======== run_skill 서비스 서버 ========
         self.skill_srv = self.create_service(
             RunSkill,
-            "run_skill",
+            "/run_skill",
             self.handle_run_skill,
             callback_group=self.service_group,
         )
@@ -181,6 +181,16 @@ class SkillManagerNode(Node):
                 response.confidence = confidence
                 response.final_pose = final_pose
                 return response
+            
+            elif cmd.skill_type == SkillCommand.LOOK_AT:
+                self.get_logger().info("🔔 RunSkill 요청: LOOK_AT")
+                success, message, confidence, final_pose = look_at.run_look_at_skill(cmd, self.ctx)
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = final_pose
+                return response
+
 
             else:
                 msg = f"skill_type={cmd.skill_type} 은(는) 아직 구현되지 않았습니다."

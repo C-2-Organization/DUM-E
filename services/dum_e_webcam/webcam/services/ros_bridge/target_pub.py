@@ -10,8 +10,8 @@ from std_msgs.msg import String
 
 
 class PerceptionPublisher(Node):
-    def __init__(self, topic: str = "/dum_e/perception/webcam"):
-        super().__init__("webcam_perception_pub")
+    def __init__(self, topic: str = "/dum_e/webcam/webcam"):
+        super().__init__("webcam_webcam_pub")
         self.pub = self.create_publisher(String, topic, 10)
 
     def publish_dict(self, data: Dict[str, Any]) -> None:
@@ -24,7 +24,7 @@ class PerceptionPublisherThread:
     """
     FastAPI/worker 코드에서 쉽게 쓰려고 스레드 래퍼 제공
     """
-    def __init__(self, topic: str = "/dum_e/perception/webcam"):
+    def __init__(self, topic: str = "/dum_e/webcam/webcam"):
         self.topic = topic
         self._node: Optional[PerceptionPublisher] = None
         self._thread: Optional[threading.Thread] = None
