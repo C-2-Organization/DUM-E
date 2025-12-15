@@ -54,6 +54,7 @@ class YOLODetector:
 
             detections.append({
                 "bbox": [x1 / w, y1 / h, x2 / w, y2 / h],   # normalized
+                "bbox_xyxy_px": [float(x1), float(y1), float(x2), float(y2)],
                 "confidence": float(conf.cpu().numpy()),
                 "class_id": cls_id,
                 "class_name": names[cls_id],
