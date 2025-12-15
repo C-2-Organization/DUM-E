@@ -6,7 +6,7 @@ load_dotenv(find_dotenv())  # 현재 경로 기준으로 부모 폴더들까지 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from webcam.routes import situation_router
+from webcam.routes import situation_router, monitor_router  # ✅ 추가
 from webcam.workers import start_worker_and_camera
 
 
@@ -33,3 +33,4 @@ def on_startup():
 
 # 라우터 등록
 webcam.include_router(situation_router)
+webcam.include_router(monitor_router)  # ✅ 추가

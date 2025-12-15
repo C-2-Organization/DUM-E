@@ -20,6 +20,7 @@ _STATE: Dict[str, Any] = {
         "bbox": None,
         "in_table_roi": None,
         "between_holes": None,
+        "confirmed": [],   # ✅ 멀티 물체 리스트
     },
 
     "gpt_inference": False,
