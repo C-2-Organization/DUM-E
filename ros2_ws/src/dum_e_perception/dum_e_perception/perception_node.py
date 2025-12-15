@@ -141,7 +141,14 @@ class PerceptionNode(Node):
             response.message = "Detection missing normalized bbox"
             return response
 
-        pose = self.estimator.bbox_to_3d(bbox_norm, depth)
+        pose = self.estimator.bbox_to_3d_heuristic(
+            best["bbox"],
+            depth,
+            roi_expand=0.08,
+            z_min=150.0,
+            z_max=2000.0,
+            median_band=30,
+        )
         if pose is None:
             response.success = False
             response.message = "Invalid depth (z=0)"
