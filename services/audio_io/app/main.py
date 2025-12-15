@@ -293,6 +293,65 @@ def _execute_plan(plan: dict) -> bool:
             executed_any = True
             continue
 
+        elif skill == "HOME":
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.HOME,
+                    object_name="",
+                    target_pose=None,
+                    params_json={},
+                    timeout_sec=30.0,
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
+                return False
+
+        elif skill == "DROP":
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.DROP,
+                    object_name="",
+                    target_pose=None,
+                    params_json={},
+                    timeout_sec=30.0,
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
+                return False
+
+        elif skill == "PLACE":
+            obj = step.get("object") or {}
+            obj_name = obj.get("canonical_en") or obj.get("raw") or ""
+            if not obj_name:
+                print("[AudioIO] ⚠ PLACE 스텝에 object_name 이 없음:", step)
+                continue
+
+            params = step.get("params") or {}
+            params_json = json.dumps(params, ensure_ascii=False)
+
+            print(f"[AudioIO] 🦾 실행: PLACE '{obj_name}', params={params}")
+
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.PLACE,
+                    object_name=obj_name,
+                    target_pose=None,
+                    params_json=params_json,
+                    timeout_sec=60.0,
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
+                return False
+
+            print(
+                f"[AudioIO] ✅ /run_skill 응답: success={resp.success}, "
+                f"confidence={resp.confidence:.2f}, message='{resp.message}'"
+            )
+
+            executed_any = True
+            continue
+
+
         else:
             print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")
 

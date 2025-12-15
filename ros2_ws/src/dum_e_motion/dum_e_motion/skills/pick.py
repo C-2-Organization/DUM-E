@@ -9,7 +9,7 @@ from dum_e_motion.motion_context import MotionContext
 
 
 PICK_CONF_TH = 0.3  # perception에서 넘어온 confidence가 이보다 낮으면 pick 안 함
-GRIPPER_OFFSET = 205
+GRIPPER_OFFSET = 210
 
 # ------------------------------------------------------------------
 # Doosan + RG2 pick 모션

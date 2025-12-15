@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find
+from dum_e_motion.skills import pick, find, home, drop, place
 
 ROBOT_ID = "dsr01"
 
@@ -175,6 +175,45 @@ class SkillManagerNode(Node):
                 success, message, confidence, final_pose = find.run_find_skill(
                     cmd, self.ctx
                 )
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = final_pose
+                return response
+
+            elif cmd.skill_type == SkillCommand.HOME:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: HOME, 기본 자세로 돌아갑니다."
+                )
+
+                success, message, confidence, final_pose = home.run_home_skill(self.ctx)
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = final_pose
+                return response
+
+            elif cmd.skill_type == SkillCommand.DROP:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: DROP, 잡고 있는 오브젝트를 떨어뜨립니다."
+                )
+
+                success, message, confidence = drop.run_drop_skill(self.ctx)
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = PoseStamped()
+                return response
+
+            elif cmd.skill_type == SkillCommand.PLACE:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: PLACE, 잡고있는 오브젝트를 지정한 위치에 놓습니다."
+                )
+
+                success, message, confidence, final_pose = place.run_place_skill(cmd, self.ctx)
 
                 response.success = success
                 response.message = message

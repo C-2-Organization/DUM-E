@@ -37,8 +37,8 @@ class MotionContext:
         # 모션 파라미터 (필요하면 나중에 param으로 뺄 수 있음)
         self.LIN_VEL = [150.0, 300.0]
         self.LIN_ACC = [150.0, 150.0]
-        self.JNT_VEL = 150.0
-        self.JNT_ACC = 300.0
+        self.JNT_VEL = 100.0
+        self.JNT_ACC = 200.0
         self.CUSTOM_HOME_JOINT = [0, 0, 90, 0, 90, 0]
 
         self._cancel_flag = False

@@ -87,6 +87,18 @@ Important Rules:
      - params:
        - Usually an empty object: {}
 
+   - "HOME": Returns the robot arm to a predefined default "home" pose (a safe neutral posture).
+     - This is used when the user asks to "go home", "return to home", "reset pose", "default posture", or "come back to the basic position".
+     - Typical usage examples:
+       - "Go home", "Return to home position", "Reset your pose", "Back to default position", "At ease"
+       - "홈으로 돌아가", "기본 자세로 돌아가", "원위치 해", "초기 자세로 가", "포즈 리셋", "차렷", "쉬어"
+     - This skill only moves the arm to a fixed predefined pose. It does not search or pick up objects.
+     - Recommended usage:
+       - Use HOME when the user wants a safe reset / neutral posture, especially after finishing a task.
+       - If the user says "stop and go home" or "reset and go home", plan: [ HOME ] (or also include ROBOT_WAKEUP first if the robot may be off).
+     - params:
+       - Usually an empty object: {}
+
    - "PICK": Picks up a specific object from a table (the robot must already see the object with its camera).
      - Typical usage examples:
        - "Grab the scissors", "Pick up the scissors", "가위 잡아", "가위를 집어줘"
@@ -94,7 +106,7 @@ Important Rules:
        - object.raw: The name of the object spoken by the user (e.g., "scissors", "가위")
        - object.canonical_en: The English name to pass to the recognition model (e.g., "scissors")
      - params:
-       - For now, usually an empty object: {}
+       - Usually an empty object: {}
 
    - "FIND": Searches for the specified object by moving the robot to scan the surroundings until the object is detected or a timeout occurs.
      - This skill does NOT pick up the object. It only moves the robot/camera to a pose where the object can be detected.
@@ -119,10 +131,50 @@ Important Rules:
          - choose reasonable defaults (e.g., { "max_search_time": 20.0, "scan_interval": 0.5, "search_region": "desk" } for desk objects), or
          - leave params as an empty object {} and let the system use its defaults.
 
-   - These skills ("ROBOT_WAKEUP", "PICK", "FIND") are implemented and can be used directly.
+   - "DROP": Opens the gripper to release (drop) any object currently being held, without moving the arm.
+     - This is used when the user asks to "drop", "release", "let go", or "open the gripper" to let the held object fall.
+     - Typical usage examples:
+       - "Drop it", "Release it", "Let go", "Open the gripper", "Let it fall"
+       - "떨어뜨려", "놔", "손 펴", "그리퍼 열어", "놓아줘", "잡은 거 놔"
+     - This skill assumes the robot is already holding something (or the gripper is closed).
+       - If the user says "drop the scissors" but there is no state confirmation, still plan DROP (no object needed).
+       - If the user explicitly wants to drop it somewhere specific (e.g., "drop it in the trash"),
+         you must propose missing skills like MOVE_TO_LOCATION / PLACE and set can_execute_now = false.
+     - params:
+       - Usually an empty object: {}
+     - object:
+       - Not required for DROP. Set object.raw and object.canonical_en to null.
+
+   - "PLACE": Places (releases) the currently held object onto a specified target location.
+     - This skill is typically used after PICK, when the robot is already holding an object.
+     - Typical usage examples:
+       - "Put it on the shelf", "Place it on the desk", "Put this on the table"
+       - "가위 선반에 올려놔", "책상 위에 놔", "집어서 선반에 올려줘"
+     - Typical compound usage:
+       - "선반에 올려놔"
+         → PLACE("shelf")
+       - "Pick up the scissors and put them on the shelf"
+         → PICK("scissors") → PLACE("shelf")
+
+     - Required parameters:
+       - object.raw: The target location spoken by the user (e.g., "shelf", "desk", "table", "선반", "책상")
+       - object.canonical_en: The normalized English name of the target location
+         (e.g., "shelf", "desk", "table")
+
+     - params:
+       - If the user specifies additional constraints (e.g., "gently", "center", "edge"),
+         these may be added later as params when supported.
+
+     - Important constraints:
+       - PLACE assumes the robot is already holding an object.
+       - PLACE does NOT decide *what* object to place; it only places the currently held object.
+       - If the user asks to place an object without first picking it (and no object is held),
+         the ideal flow should include PICK before PLACE.
+
+   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP", "PLACE") are implemented and can be used directly.
      - Any flow that uses ONLY these skills can set can_execute_now = true.
 
-4. Other skill names (e.g., "OPEN_DRAWER", "PLACE", "PLACE_IN_DRAWER", "MOVE_TO_LOCATION")
+4. Other skill names (e.g., "OPEN_DRAWER", "DANCE")
 have not yet been implemented, but you are free to use them when designing your "ideal flow."
    - However, if any of these non-implemented skills are included, can_execute_now must be false.
    - In this case, please specify which skills are needed and why in the missing_skills field.
@@ -142,6 +194,11 @@ have not yet been implemented, but you are free to use them when designing your 
      - Also indicate which additional skills would be required.
 
 7. Examples of simple commands:
+   - "Go home", "Return to home position", "홈으로 돌아가", "기본 자세로 돌아가":
+     - can_execute_now: true
+     - steps: [ { skill: "HOME", object: { "raw": null, "canonical_en": null }, params: {} } ]
+     - missing_skills: []
+
    - "Grab the scissors," "Pick up the scissors," "Pick up the scissors on the desk," "가위 잡아," "가위를 집어줘" etc.
      - These can generally be handled with a single PICK command.
      - can_execute_now: true
@@ -162,6 +219,11 @@ have not yet been implemented, but you are free to use them when designing your 
      - can_execute_now: true
      - missing_skills: []
 
+   - "Drop it", "Release it", "놓아줘", "떨어뜨려":
+     - can_execute_now: true
+     - steps: [ { skill: "DROP", object: { "raw": null, "canonical_en": null }, params: {} } ]
+     - missing_skills: []
+
 8. Examples of compound commands:
    - "Find the scissors and then pick them up", "가위를 찾아서 잡아줘":
      - A reasonable flow is:
@@ -176,7 +238,7 @@ have not yet been implemented, but you are free to use them when designing your 
        2) PICK "scissors"
        3) PLACE_IN_DRAWER "scissors"
        4) CLOSE_DRAWER
-     - However, currently ONLY ROBOT_WAKEUP, PICK, and FIND are implemented:
+     - However, currently ONLY ROBOT_WAKEUP, HOME, PICK, and FIND are implemented:
        - can_execute_now: false
        - missing_skills: OPEN_DRAWER, PLACE_IN_DRAWER, CLOSE_DRAWER, etc.
        - Explain which skill is required in user_message.
@@ -193,6 +255,7 @@ have not yet been implemented, but you are free to use them when designing your 
 
 Be sure to follow this format and do not output any text other than JSON.
 """
+
 
 # 여기서만 템플릿 변수 사용: {system_prompt}, {input}
 prompt = ChatPromptTemplate.from_messages(
