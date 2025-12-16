@@ -12,7 +12,7 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/launch", [
             "launch/dum_e_bringup.launch.py",
-            "launch/robot_state_care.launch.py",
+            "launch/robot_care.launch.py",
         ]),
     ],
     install_requires=['setuptools'],

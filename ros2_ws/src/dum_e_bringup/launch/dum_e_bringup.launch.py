@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
@@ -99,14 +100,23 @@ def generate_launch_description():
     )
 
     # -------------------------------
-    # 5) Robot state care node
-    #    ros2 run dum_e_bringup robot_state_care_node
+    # 5) Robot state care node (옵션)
+    #    - 통합 런치 외부에서 독립 실행 권장
+    #    - 필요 시 인자로 포함 (with_care:=true)
     # -------------------------------
+    with_care = LaunchConfiguration("with_care")
+    declare_with_care = DeclareLaunchArgument(
+        "with_care",
+        default_value="false",
+        description="Include robot_state_care_node in this launch (default: false)",
+    )
+
     robot_state_care_node = Node(
         package='dum_e_bringup',
         executable='robot_state_care_node',
         name='robot_state_care_node',
         output='screen',
+        condition=IfCondition(with_care),
     )
 
     # -------------------------------
@@ -119,12 +129,14 @@ def generate_launch_description():
     ld.add_action(declare_doosan_port)
     ld.add_action(declare_doosan_mode)
     ld.add_action(declare_doosan_model)
+    ld.add_action(declare_with_care)
 
     # bringup 요소들
     ld.add_action(dsr_launch)
     ld.add_action(rs_launch)
     ld.add_action(perception_node)
     ld.add_action(skill_manager_node)
+    # 기본은 care 노드 제외 (with_care:=true일 때만 포함)
     ld.add_action(robot_state_care_node)
 
     return ld

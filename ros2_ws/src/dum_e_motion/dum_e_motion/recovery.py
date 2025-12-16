@@ -138,6 +138,8 @@ class CollisionRecovery:
         
         # 로그 파일
         self.log_file = '/tmp/recovery_monitor.log'
+        # 복구 완료 후 드라이버 재시작 여부(기본 비활성화)
+        self.restart_driver_after_complete = False
         
         # 서비스 클라이언트 초기화
         self._init_clients()
@@ -447,8 +449,8 @@ class CollisionRecovery:
             self.node.get_logger().warn(f'[Recovery] SAFE_STOP 리셋 시도 {retry + 1}/3')
             
             result = self._call_control(ControlCode.RESET_SAFE_STOP)
-            # 재시도 사이 대기를 0.3초로 단축
-            time.sleep(0.3)
+            # 재시도 사이 대기를 0.2초로 단축
+            time.sleep(0.2)
             
             # 상태 확인 (GetRobotState 호출) - 빠르게 확인
             if self.robot or True:  # 항상 상태 확인
@@ -463,7 +465,7 @@ class CollisionRecovery:
                     self.node.get_logger().warn(f'[Recovery] ⚠️ 여전히 SAFE_STOP (시도 {retry+1}/3) - 상태: {state_str}')
                     self._write_log('warn', f'⚠️ 여전히 SAFE_STOP (시도 {retry+1}/3)')
                     # 더 짧은 대기로 빠르게 재시도
-                    time.sleep(0.5)
+                    time.sleep(0.3)
                     continue
                 else:
                     self.node.get_logger().info(f'[Recovery] 리셋 후 상태: {state_str}')
@@ -483,16 +485,16 @@ class CollisionRecovery:
             return None
         
         try:
-            if not self.cli_state.wait_for_service(timeout_sec=0.5):
+            if not self.cli_state.wait_for_service(timeout_sec=0.4):
                 return None
             
             req = GetRobotState.Request()
             future = self.cli_state.call_async(req)
             
             start = time.time()
-            # 타임아웃을 0.5초로 단축
-            while not future.done() and (time.time() - start) < 0.5:
-                time.sleep(0.05)
+            # 타임아웃을 0.4초로 단축, 폴링 간격 0.03초
+            while not future.done() and (time.time() - start) < 0.4:
+                time.sleep(0.03)
             
             if future.done():
                 result = future.result()
@@ -542,7 +544,7 @@ class CollisionRecovery:
         self._notify_progress('복구 모드 진입', 25)
         self._write_log('info', '[Recovery] 단계 2: RECOVERY 모드 진입')
         result = self._call_safety(SafetyMode.RECOVERY, SafetyEvent.ENTER)
-        time.sleep(0.3)
+        time.sleep(0.2)
         if result:
             self._write_log('info', '✅ RECOVERY 모드 진입 성공')
         else:
@@ -554,7 +556,7 @@ class CollisionRecovery:
         self._notify_progress('Z축 상승', 50)
         self._write_log('info', f'[Recovery] 단계 3: Z축 상승 ({RECOVERY_JOG_SPEED}mm/s, {RECOVERY_JOG_TIME}초)')
         result = self._call_jog(RECOVERY_JOG_AXIS_Z, RECOVERY_JOG_SPEED, RECOVERY_JOG_TIME)
-        time.sleep(0.3)
+        time.sleep(0.2)
         if result:
             self._write_log('info', '✅ Z축 상승 완료')
         else:
@@ -566,7 +568,7 @@ class CollisionRecovery:
         self._notify_progress('복구 완료 처리', 70)
         self._write_log('info', '[Recovery] 단계 4: RECOVERY 완료 처리')
         result = self._call_safety(SafetyMode.RECOVERY, SafetyEvent.COMPLETE)
-        time.sleep(0.5)
+        time.sleep(0.3)
         if result:
             self._write_log('info', '✅ RECOVERY 완료 처리 성공')
         else:
@@ -578,7 +580,7 @@ class CollisionRecovery:
         self._notify_progress('복구 모드 종료', 85)
         self._write_log('info', '[Recovery] 단계 5: RECOVERY 모드 해제')
         result = self._call_control(ControlCode.RESET_RECOVERY)
-        time.sleep(0.5)
+        time.sleep(0.3)
         if result:
             self._write_log('info', '✅ RECOVERY 모드 해제 성공')
         else:
@@ -592,14 +594,14 @@ class CollisionRecovery:
         self.node.get_logger().info('[Recovery] 🔧 서보 ON 시작...')
         
         result = self._call_control(ControlCode.SERVO_ON)
-        time.sleep(1.0)
+        time.sleep(0.7)
         
         if result:
             self._write_log('info', '✅ 서보 ON 완료')
             self.node.get_logger().info('[Recovery] ✅ 서보 ON 완료')
             
             # 🔴 서보 ON 후 상태 확인
-            time.sleep(0.5)
+            time.sleep(0.3)
             current_state = self._get_robot_state()
             if current_state is not None:
                 from .recovery import state_name
@@ -739,6 +741,7 @@ class CollisionRecovery:
         """
         if self._is_recovering:
             self.node.get_logger().warn('[Recovery] 이미 복구 중')
+            print('[Recovery] ⚠️ 이미 복구 중', flush=True)
             return False
         
         self._is_recovering = True
@@ -746,12 +749,15 @@ class CollisionRecovery:
         success = False
         was_gripping = False
         
+        print('[Recovery] ✅ auto_recover() 함수 진입 완료', flush=True)
+        
         try:
             # 그립 상태 확인
             if self.robot and hasattr(self.robot, 'is_gripping'):
                 was_gripping = self.robot.is_gripping()
                 grip_status = "🔴 물체 잡음" if was_gripping else "⚪ 빈 손"
                 self.node.get_logger().info(f'[Recovery] 그립 상태: {grip_status}')
+                print(f'[Recovery] 그립 상태: {grip_status}', flush=True)
                 self._write_log('info', f'그립 상태: {grip_status}')
             
             # Z 높이 확인 (바닥 충돌 판단)
@@ -763,17 +769,21 @@ class CollisionRecovery:
             
             self.node.get_logger().info('=' * 60)
             self.node.get_logger().info(f'[Recovery] 자동 복구 시작 - {case_type}, Z={z_str}')
+            print(f'[Recovery] 자동 복구 시작 - {case_type}, Z={z_str}', flush=True)
             self._write_log('info', f'🚨 자동 복구 시작 - {case_type}, Z={z_str}')
             if was_gripping:
                 self.node.get_logger().info('[Recovery] → 물체 반납 후 홈으로 이동')
+                print('[Recovery] → 물체 반납 후 홈으로 이동', flush=True)
                 self._write_log('info', '→ 물체 반납 후 홈으로 이동')
             else:
                 self.node.get_logger().info('[Recovery] → 홈으로 직행')
+                print('[Recovery] → 홈으로 직행', flush=True)
                 self._write_log('info', '→ 홈으로 직행')
             self.node.get_logger().info('=' * 60)
             
             for attempt in range(max_attempts):
                 self.node.get_logger().info(f'[Recovery] 시도 {attempt + 1}/{max_attempts}')
+                recovery_success = False
                 
                 # 1. SAFE_STOP 리셋
                 if not self.reset_safe_stop():
@@ -822,12 +832,12 @@ class CollisionRecovery:
                     continue
                 
                 # 7. 서비스 안정화 대기
-                self.node.get_logger().info('[Recovery] 서비스 안정화 대기 (2초)...')
-                time.sleep(2.0)
+                self.node.get_logger().info('[Recovery] 서비스 안정화 대기 (1초)...')
+                time.sleep(1.0)
                 
                 # 🔴 최종 상태 확인 및 STANDBY 대기
                 self.node.get_logger().info('[Recovery] 최종 상태 확인 중...')
-                max_wait = 10.0  # 최대 10초 대기
+                max_wait = 2.0  # 최대 2초 대기
                 wait_start = time.time()
                 final_state = None
                 
@@ -838,6 +848,7 @@ class CollisionRecovery:
                         
                         if final_state == RobotState.STANDBY:
                             self.node.get_logger().info('[Recovery] ✅ STANDBY 상태 확인 완료')
+                            recovery_success = True
                             break
                         elif final_state == RobotState.SAFE_STOP:
                             self.node.get_logger().warn(f'[Recovery] ⏳ SAFE_STOP 상태 - STANDBY 대기 중... ({int(time.time() - wait_start)}초)')
@@ -848,7 +859,7 @@ class CollisionRecovery:
                         else:
                             self.node.get_logger().warn(f'[Recovery] ⚠️ 예상치 못한 상태: {state_name(final_state)}')
                     
-                    time.sleep(0.5)
+                    time.sleep(0.2)
                 
                 # 타임아웃 체크
                 if final_state != RobotState.STANDBY:
@@ -858,8 +869,8 @@ class CollisionRecovery:
                 
                 # recovery_success가 False면 여기서 중단
                 if not recovery_success:
-                    self.node.get_logger().error('[Recovery] ❌ 복구 실패 - 재시도 중...')
-                    time.sleep(1.0)
+                    self.node.get_logger().error(f'[Recovery] ❌ 복구 실패 (시도 {attempt + 1}/{max_attempts}) - 재시도...')
+                    time.sleep(0.5)  # 0.5초 대기 후 재시도
                     continue
                 
                 # ✅ 6단계 복구 시퀀스 완료
@@ -871,11 +882,11 @@ class CollisionRecovery:
                     self._notify_progress('복구 완료', 100)
                     self.node.get_logger().info('✅ [Recovery] 복구 시퀀스 완료!')
                     
-                    # 드라이버 재시작으로 상태 초기화 (movel 충돌 방지)
-                    self.node.get_logger().warn('[Recovery] 🔄 복구 완료 후 드라이버 재시작...')
-                    self._restart_driver()
-                    
-                    self.node.get_logger().info('[Recovery] ✅ 전체 복구 완료 (movel 제외)')
+                    # 필요 시에만 드라이버 재시작 (기본 비활성화)
+                    if self.restart_driver_after_complete:
+                        self.node.get_logger().warn('[Recovery] 🔄 복구 완료 후 드라이버 재시작...')
+                        self._restart_driver()
+                        self.node.get_logger().info('[Recovery] ✅ 드라이버 재시작 완료')
                     
                     success = True
                     break
