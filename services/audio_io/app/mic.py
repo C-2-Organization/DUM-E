@@ -2,6 +2,7 @@
 
 import io
 import wave
+import os
 import pyaudio
 
 from .config import MicConfig
@@ -14,6 +15,15 @@ class MicController:
         self.audio: pyaudio.PyAudio | None = None
         self.stream: pyaudio.Stream | None = None
         self.sample_width: int | None = None
+
+        # 환경변수로 입력 디바이스 선택 가능
+        env_device = os.getenv("MIC_DEVICE_INDEX")
+        if env_device is not None:
+            try:
+                self.config.device_index = int(env_device)
+                print(f"[Mic] Using input device index from env: {self.config.device_index}")
+            except ValueError:
+                print(f"[Mic] Invalid MIC_DEVICE_INDEX: {env_device}")
 
     def open_stream(self):
         """새로운 PyAudio 인스턴스를 생성하고 입력 스트림을 엽니다."""

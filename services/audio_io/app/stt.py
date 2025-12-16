@@ -38,12 +38,24 @@ class StreamingSTT:
         self.client = OpenAI(api_key=api_key)
         self.samplerate = samplerate
         self.chunk_duration = chunk_duration
-        self.silence_sec = silence_sec
+        # 환경변수로 튜닝 가능
+        env_silence = get_env("STT_SILENCE_SEC")
+        self.silence_sec = float(env_silence) if env_silence else silence_sec
         self.max_total_sec = max_total_sec
-        self.energy_threshold = energy_threshold
+        env_energy = get_env("STT_ENERGY_THRESHOLD")
+        self.energy_threshold = float(env_energy) if env_energy else energy_threshold
 
-        # 🔥 추가: WebRTC VAD + ambient 에너지 추정용
-        self.vad = webrtcvad.Vad(2)  # 0~3, 클수록 더 aggressive
+        # VAD 민감도 및 비율 조건도 환경변수로 조정
+        env_vad_level = get_env("STT_VAD_LEVEL")
+        vad_level = int(env_vad_level) if env_vad_level else 2
+        self.vad = webrtcvad.Vad(max(0, min(3, vad_level)))  # 0~3
+
+        env_speech_ratio_block = get_env("STT_SPEECH_RATIO_BLOCK")
+        self.speech_ratio_block = float(env_speech_ratio_block) if env_speech_ratio_block else 0.3
+
+        env_speech_ratio_total = get_env("STT_SPEECH_RATIO_TOTAL")
+        self.speech_ratio_total = float(env_speech_ratio_total) if env_speech_ratio_total else 0.1
+        # 🔥 추가: ambient 에너지 추정용
         self.ambient_energy: float | None = None
 
         print(
@@ -100,8 +112,8 @@ class StreamingSTT:
                     print(f"[STT] 🌡 ambient_energy 추정: {self.ambient_energy:.2f}")
             ambient = self.ambient_energy or block_energy
 
-            # Adaptive threshold: 주변 소음에 비례해서 가중
-            adaptive_threshold = max(self.energy_threshold, ambient * 2.0)
+            # Adaptive threshold: 주변 소음에 비례해서 가중 (덜 공격적으로)
+            adaptive_threshold = max(self.energy_threshold * 0.4, ambient * 1.2)
 
             print(
                 f"[STT] 🔊 block_energy={block_energy:.2f}, "
@@ -128,7 +140,7 @@ class StreamingSTT:
 
             # 5) noise gate + VAD 동시 조건
             is_speech_block = (
-                block_energy > adaptive_threshold and speech_ratio > 0.3
+                block_energy > adaptive_threshold and speech_ratio > self.speech_ratio_block
             )
 
             if is_speech_block:
@@ -165,7 +177,7 @@ class StreamingSTT:
 
         print(f"[STT] 📊 전체 total_speech_ratio={total_speech_ratio:.2f}")
 
-        if total_speech_ratio < 0.1:
+        if total_speech_ratio < self.speech_ratio_total:
             print("[STT] ⚠ 음성 비율이 너무 낮아서 '말이 없는 잡음'으로 간주합니다.")
             return np.zeros((0,), dtype=np.int16)
 

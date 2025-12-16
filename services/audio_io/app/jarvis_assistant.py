@@ -28,21 +28,26 @@ class JarvisAssistant:
 
     def _build_system_prompt(self) -> str:
         """
-        English Jarvis-style tone guideline.
+        Jarvis-style tone guideline.
+        Language follows environment variable JARVIS_LANG (ko/en).
         Not imitating any specific actor or copyrighted character.
         """
-        return (
+        lang = (get_env("JARVIS_LANG") or "ko").lower()
+        base = (
             "You are a highly advanced AI assistant reminiscent of a futuristic "
             "scientific support system. Do NOT imitate any copyrighted characters "
             "or real actors. Your tone should be calm, polite, concise, and analytical. "
-            "Always respond in English. Avoid emotional expressions or unnecessary remarks. "
             "Limit responses to 1–3 sentences unless otherwise required. "
             "Provide clear status, system context, or guidance for the user."
         )
+        if lang.startswith("ko"):
+            return base + " Always respond in Korean."
+        else:
+            return base + " Always respond in English."
 
     def generate_reply(self, user_text: str) -> str:
         """
-        Converts user_text into a refined, Jarvis-style English response.
+        Converts user_text into a refined, Jarvis-style response in the configured language.
         """
         user_text = user_text.strip()
         if not user_text:
