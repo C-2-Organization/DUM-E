@@ -9,7 +9,7 @@ from dum_e_motion.motion_context import MotionContext
 
 
 PICK_CONF_TH = 0.3  # perception에서 넘어온 confidence가 이보다 낮으면 pick 안 함
-GRIPPER_OFFSET = 210
+GRIPPER_OFFSET = 215
 
 # ------------------------------------------------------------------
 # Doosan + RG2 pick 모션
@@ -152,17 +152,17 @@ def run_pick_skill(
     # 2) camera_link → base 좌표 변환
     # cam_pose는 "물체 중심 좌표" (카메라 기준)
     # TCP(그리퍼 베이스)는 물체보다 카메라 쪽으로 205mm 뒤에 있어야 하므로,
-    # 카메라 프레임에서 z축으로 0.205m 빼준 위치를 TCP 목표로 사용.
+    # 카메라 프레임에서 z축으로 205mm 빼준 위치를 TCP 목표로 사용.
     tcp_cam_pose = PoseStamped()
     tcp_cam_pose.header = cam_pose.header  # frame_id='camera_link' 유지
     tcp_cam_pose.pose = cam_pose.pose
 
     # RealSense 기준: +Z가 카메라 앞 방향이라고 가정.
     # 그리퍼가 카메라 앞쪽으로 205mm 나와 있으니,
-    # TCP는 물체보다 카메라 쪽으로 0.205m 뒤에 있어야 한다 → z -= 0.205
+    # TCP는 물체보다 카메라 쪽으로 205mm 뒤에 있어야 한다 → z -= 205
     tcp_cam_pose.pose.position.z -= GRIPPER_OFFSET
 
-    # 혹시 depth가 0.205m보다 작은 비정상적인 경우 방어
+    # 혹시 depth가 205mm보다 작은 비정상적인 경우 방어
     if tcp_cam_pose.pose.position.z <= 0.0:
         msg = (
             f"computed tcp_cam_pose.z={tcp_cam_pose.pose.position.z:.3f} <= 0.0, "
