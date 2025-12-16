@@ -1,13 +1,20 @@
 # yolo_detector.py
 from ultralytics import YOLO
+import torch
 
 class YOLODetector:
-    def __init__(self, model_path, device: str = "cuda"):
+    def __init__(self, model_path, device: str | None = None):
         """
         model_path 예: '/home/.../models/yolov8s-worldv2.pt'
+        device:
+          - None: 자동 선택 (cuda 가능하면 cuda, 아니면 cpu)
+          - "cpu" / "cuda" 강제 가능
         """
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
         self.model = YOLO(model_path)
-        self.model.to(device)
+        self.model.to(device)  # 여기서 cuda 없으면 죽었었음 :contentReference[oaicite:3]{index=3}
 
         try:
             clip_model = self.model.model.clip_model

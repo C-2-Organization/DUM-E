@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find, home, drop, place
+from dum_e_motion.skills import pick, find, home, drop, place, handover
 
 ROBOT_ID = "dsr01"
 
@@ -214,6 +214,21 @@ class SkillManagerNode(Node):
                 )
 
                 success, message, confidence, final_pose = place.run_place_skill(cmd, self.ctx)
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = final_pose
+                return response
+
+            elif cmd.skill_type == SkillCommand.HANDOVER:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: HANDOVER, 사람에게 물체를 건네줍니다."
+                )
+
+                success, message, confidence, final_pose = handover.run_handover_skill(
+                    cmd, self.ctx
+                )
 
                 response.success = success
                 response.message = message

@@ -155,23 +155,33 @@ Important Rules:
          → PLACE("shelf")
        - "Pick up the scissors and put them on the shelf"
          → PICK("scissors") → PLACE("shelf")
-
      - Required parameters:
        - object.raw: The target location spoken by the user (e.g., "shelf", "desk", "table", "선반", "책상")
-       - object.canonical_en: The normalized English name of the target location
-         (e.g., "shelf", "desk", "table")
-
+       - object.canonical_en: The normalized English name of the target location (e.g., "shelf", "desk", "table")
      - params:
        - If the user specifies additional constraints (e.g., "gently", "center", "edge"),
          these may be added later as params when supported.
-
      - Important constraints:
        - PLACE assumes the robot is already holding an object.
        - PLACE does NOT decide *what* object to place; it only places the currently held object.
        - If the user asks to place an object without first picking it (and no object is held),
          the ideal flow should include PICK before PLACE.
 
-   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP", "PLACE") are implemented and can be used directly.
+   - "HANDOVER": Hands over the currently held object to a human.
+     - This skill approaches the human hand position estimated by perception and opens the gripper to release the object.
+     - Typical usage examples:
+       - "come on", "come on dummy", "come on dum-e", "hand it to me", "give it to me"
+       - "줘", "건네줘", "내 손에 줘", "여기 줘"
+     - object:
+       - Not required for HANDOVER. Set object.raw and object.canonical_en to null.
+     - params:
+       - Optional numeric parameters (millimeters / seconds):
+         - "pre_x_offset": float (default -80)
+         - "pre_z_offset": float (default 100)
+         - "approach_z_offset": float (default 30)
+         - "wait_sec": float (default 1.5)
+
+   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP", "PLACE", "HANDOVER") are implemented and can be used directly.
      - Any flow that uses ONLY these skills can set can_execute_now = true.
 
 4. Other skill names (e.g., "OPEN_DRAWER", "DANCE")
@@ -252,6 +262,15 @@ have not yet been implemented, but you are free to use them when designing your 
      - [ FIND, PICK ] for the same object.
    - When the user asks for a skill that requires the robot to be on and ready, and the robot might be off,
      you may start the flow with ROBOT_WAKEUP before other skills.
+     
+10. Hard rule for voice trigger:
+   - If the user's command contains "come on" (case-insensitive), you MUST output:
+     - can_execute_now: true
+     - steps: exactly one step with skill "HANDOVER"
+     - object.raw: null, object.canonical_en: null
+     - params: { "pre_x_offset": -80, "pre_z_offset": 100, "approach_z_offset": 30, "wait_sec": 1.5 }
+     - missing_skills: []
+
 
 Be sure to follow this format and do not output any text other than JSON.
 """
