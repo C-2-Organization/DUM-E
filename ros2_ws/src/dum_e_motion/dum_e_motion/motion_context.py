@@ -67,11 +67,14 @@ class MotionContext:
         콜백 안에서 self를 spin하지 않기 위해 임시 노드를 사용한다.
         """
         tmp_node = rclpy.create_node("pose_client_tmp")
-        client = tmp_node.create_client(GetObjectPose, "get_object_pose")
+
+        srv_name = "/get_object_pose"
+        client = tmp_node.create_client(GetObjectPose, srv_name)
 
         self.node.get_logger().info(
-            f"Waiting for /get_object_pose service (object='{object_name}')..."
+            f"Waiting for {srv_name} service (object='{object_name}')..."
         )
+
         if not client.wait_for_service(timeout_sec=5.0):
             self.node.get_logger().error("❌ /get_object_pose 서비스가 준비되지 않았습니다. (timeout)")
             tmp_node.destroy_node()
