@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             "skill_manager_node = dum_e_motion.skill_manager_node:main",
+            "test_motion = dum_e_motion.test_motion:main",
         ],
     },
 )

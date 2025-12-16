@@ -99,6 +99,17 @@ def generate_launch_description():
     )
 
     # -------------------------------
+    # 5) Robot state care node
+    #    ros2 run dum_e_bringup robot_state_care_node
+    # -------------------------------
+    robot_state_care_node = Node(
+        package='dum_e_bringup',
+        executable='robot_state_care_node',
+        name='robot_state_care_node',
+        output='screen',
+    )
+
+    # -------------------------------
     # LaunchDescription 구성
     # -------------------------------
     ld = LaunchDescription()
@@ -114,5 +125,6 @@ def generate_launch_description():
     ld.add_action(rs_launch)
     ld.add_action(perception_node)
     ld.add_action(skill_manager_node)
+    ld.add_action(robot_state_care_node)
 
     return ld
