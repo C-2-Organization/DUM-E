@@ -3,7 +3,6 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# ✅ 중요: --reload 제거 (ROS + 스레드 + uvicorn reload 조합이 꼬임)
 UVICORN_CMD='uvicorn webcam.main:webcam'
 UI_CMD='python3 webcam/tools/monitor_textual.py'
 

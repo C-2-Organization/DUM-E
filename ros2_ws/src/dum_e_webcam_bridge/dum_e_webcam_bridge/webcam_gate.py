@@ -4,16 +4,44 @@ from __future__ import annotations
 import os
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String
 
 from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 
-from rclpy.qos import qos_profile_sensor_data
+
+# ---------------------------
+# Utils
+# ---------------------------
+def _env(name: str, default: str) -> str:
+    return os.getenv(name, default)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(_env(name, str(default)))
+    except Exception:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))
+    except Exception:
+        return default
 
 
 def _clamp01(x: float) -> float:
@@ -28,14 +56,59 @@ def _get_lookat_skill_type() -> int:
     """
     if hasattr(SkillCommand, "LOOK_AT"):
         return int(getattr(SkillCommand, "LOOK_AT"))
-    return int(os.getenv("LOOKAT_SKILL_TYPE", "2"))
+    return _env_int("LOOKAT_SKILL_TYPE", 2)
 
 
-def _topic(name: str, default: str) -> str:
-    """토픽명도 하드코딩 줄이기: env 우선"""
-    return os.getenv(name, default)
+# ---------------------------
+# Config
+# ---------------------------
+@dataclass(frozen=True)
+class GateConfig:
+    # Topics / Services
+    in_topic: str = "/dum_e/webcam/webcam"
+    run_skill_service: str = "/run_skill"
+
+    # Filtering
+    min_conf: float = 0.20
+    min_hit: int = 3
+    require_miss0: bool = True
+    prefer_table: bool = True
+
+    # Stabilization
+    lock_sec: float = 1.0
+    call_min_interval: float = 0.7
+    min_move_mm: float = 20.0
+
+    # Look-at params
+    off_x_mm: float = 0.0
+    off_y_mm: float = 0.0
+
+    # Logging
+    debug: bool = False
+    wait_service_sec: float = 5.0
+
+    @staticmethod
+    def from_env() -> "GateConfig":
+        return GateConfig(
+            in_topic=_env("WEBCAM_GATE_IN_TOPIC", "/dum_e/webcam/webcam"),
+            run_skill_service=_env("WEBCAM_GATE_SERVICE", "/run_skill"),
+            min_conf=_env_float("GATE_MIN_CONF", 0.20),
+            min_hit=_env_int("GATE_MIN_HIT", 3),
+            require_miss0=_env_bool("GATE_REQUIRE_MISS0", True),
+            prefer_table=_env_bool("GATE_PREFER_TABLE", True),
+            lock_sec=_env_float("GATE_LOCK_SEC", 1.0),
+            call_min_interval=_env_float("GATE_CALL_MIN_INTERVAL", 0.7),
+            min_move_mm=_env_float("GATE_MIN_MOVE_MM", 20.0),
+            off_x_mm=_env_float("LOOK_OFFSET_X_MM", 0.0),
+            off_y_mm=_env_float("LOOK_OFFSET_Y_MM", 0.0),
+            debug=_env_bool("GATE_DEBUG", False),
+            wait_service_sec=_env_float("WEBCAM_GATE_WAIT_SERVICE_SEC", 5.0),
+        )
 
 
+# ---------------------------
+# Node
+# ---------------------------
 class WebcamGate(Node):
     """
     IN_TOPIC (JSON String)을 받아서:
@@ -46,63 +119,43 @@ class WebcamGate(Node):
     def __init__(self):
         super().__init__("webcam_gate")
 
-        # ✅ 토픽 하드코딩 제거 (env로 제어)
-        self.in_topic = _topic("WEBCAM_GATE_IN_TOPIC", "/dum_e/webcam/webcam")
-
-        # ✅ 센서 스트림/비정기 스트링에도 잘 맞는 QoS
-        self.create_subscription(String, self.in_topic, self.cb, qos_profile_sensor_data)
-
-        self.cli = self.create_client(RunSkill, "/run_skill")
-
-        # ✅ 서비스 대기(너 receiver처럼 안전하게)
-        wait_sec = float(os.getenv("WEBCAM_GATE_WAIT_SERVICE_SEC", "5.0"))
-        self.get_logger().info(f"Waiting for /run_skill service... ({wait_sec}s)")
-        self.cli.wait_for_service(timeout_sec=wait_sec)
-
-        # ✅ 스킬 타입: enum 우선(하드코딩 X)
+        self.cfg = GateConfig.from_env()
         self.lookat_skill_type = _get_lookat_skill_type()
 
-        # ---- 튜닝 파라미터 (env로 조절 가능) ----
-        self.min_conf = float(os.getenv("GATE_MIN_CONF", "0.20"))
-        self.min_hit = int(os.getenv("GATE_MIN_HIT", "3"))
-        self.require_miss0 = os.getenv("GATE_REQUIRE_MISS0", "1").lower() in ("1", "true", "yes")
-        self.prefer_table = os.getenv("GATE_PREFER_TABLE", "1").lower() in ("1", "true", "yes")
+        self.create_subscription(String, self.cfg.in_topic, self.cb, qos_profile_sensor_data)
+        self.cli = self.create_client(RunSkill, self.cfg.run_skill_service)
 
-        self.lock_sec = float(os.getenv("GATE_LOCK_SEC", "1.0"))
-        self.call_min_interval = float(os.getenv("GATE_CALL_MIN_INTERVAL", "0.7"))
-        self.min_move_mm = float(os.getenv("GATE_MIN_MOVE_MM", "20"))
+        self.get_logger().info(f"Waiting for {self.cfg.run_skill_service} service... ({self.cfg.wait_service_sec}s)")
+        self.cli.wait_for_service(timeout_sec=self.cfg.wait_service_sec)
 
-        # look_at 기본 파라미터(mm/deg)
-        self.look_z_mm = float(os.getenv("LOOK_Z_MM", "350"))
-        self.look_rx = float(os.getenv("LOOK_RX", "180"))
-        self.look_ry = float(os.getenv("LOOK_RY", "0"))
-        self.look_rz = float(os.getenv("LOOK_RZ", "90"))
-        self.off_x_mm = float(os.getenv("LOOK_OFFSET_X_MM", "0"))
-        self.off_y_mm = float(os.getenv("LOOK_OFFSET_Y_MM", "0"))
-
-        # ---- 내부 상태(락/스로틀) ----
+        # ---- state ----
         self._locked_track_id: Optional[int] = None
         self._lock_until_ts: float = 0.0
         self._last_call_ts: float = 0.0
         self._last_sent_xy: Optional[Tuple[float, float]] = None
+        self._busy = False
+        self._busy_until = 0.0
 
-        # ✅ 여기서는 data 같은 런타임 변수 쓰면 안 됨 (cb에서만 있음)
         self.get_logger().info(
             "WebcamGate ready | "
-            f"in_topic='{self.in_topic}' "
+            f"in_topic='{self.cfg.in_topic}' "
             f"LOOK_AT skill_type={self.lookat_skill_type} "
-            f"min_conf={self.min_conf} min_hit={self.min_hit} miss0={self.require_miss0} "
-            f"prefer_table={self.prefer_table} "
-            f"lock={self.lock_sec}s call_interval={self.call_min_interval}s min_move={self.min_move_mm}mm"
+            f"min_conf={self.cfg.min_conf} min_hit={self.cfg.min_hit} miss0={self.cfg.require_miss0} "
+            f"prefer_table={self.cfg.prefer_table} "
+            f"lock={self.cfg.lock_sec}s call_interval={self.cfg.call_min_interval}s min_move={self.cfg.min_move_mm}mm "
+            f"debug={self.cfg.debug}"
         )
 
-    # ---------- 선택 로직 ----------
+    # ---------------------------
+    # Candidate selection helpers
+    # ---------------------------
     def _score(self, c: Dict[str, Any]) -> float:
         conf = float(c.get("conf") or 0.0)
         hit = float(c.get("hit") or 0.0)
         return 0.7 * conf + 0.3 * _clamp01(hit / 10.0)
 
-    def _dist_mm(self, a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    @staticmethod
+    def _dist_mm(a: Tuple[float, float], b: Tuple[float, float]) -> float:
         dx = a[0] - b[0]
         dy = a[1] - b[1]
         return (dx * dx + dy * dy) ** 0.5
@@ -118,11 +171,11 @@ class WebcamGate(Node):
             hit = int(c.get("hit") or 0)
             miss = int(c.get("miss") or 0)
 
-            if conf < self.min_conf:
+            if conf < self.cfg.min_conf:
                 continue
-            if hit < self.min_hit:
+            if hit < self.cfg.min_hit:
                 continue
-            if self.require_miss0 and miss != 0:
+            if self.cfg.require_miss0 and miss != 0:
                 continue
 
             out.append(c)
@@ -132,39 +185,82 @@ class WebcamGate(Node):
         if not cands:
             return None
 
-        if self.prefer_table:
+        pool = cands
+        if self.cfg.prefer_table:
             table = [c for c in cands if c.get("in_table_roi") is True]
             if table:
-                cands = table
+                pool = table
 
-        cands = sorted(
-            cands,
+        pool = sorted(
+            pool,
             key=lambda c: (self._score(c), float(c.get("conf") or 0.0)),
             reverse=True,
         )
-        return cands[0] if cands else None
+        return pool[0] if pool else None
 
-    def _find_by_track(self, cands: List[Dict[str, Any]], tid: int) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _find_by_track(cands: List[Dict[str, Any]], tid: int) -> Optional[Dict[str, Any]]:
         for c in cands:
             if c.get("track_id") == tid:
                 return c
         return None
 
-    # ---------- ROS 콜 ----------
-    def _call_run_skill_lookat(self, best: Dict[str, Any], stamp: Any):
+    def _should_trigger_action(self, action_raw: Any) -> bool:
+        action = (action_raw or "idle").strip()
+        return action in ("look_at", "inspect", "track", "look")
+
+    def _update_lock(self, now: float, best: Dict[str, Any]) -> None:
+        tid = best.get("track_id")
+        if tid is None:
+            self._locked_track_id = None
+            self._lock_until_ts = 0.0
+            return
+        self._locked_track_id = int(tid)
+        self._lock_until_ts = now + self.cfg.lock_sec
+
+    def _passes_min_move(self, best: Dict[str, Any]) -> bool:
+        xy = best.get("robot_xy")
+        try:
+            xy2 = (float(xy[0]), float(xy[1]))
+        except Exception:
+            return False
+
+        if self._last_sent_xy is not None:
+            if self._dist_mm(self._last_sent_xy, xy2) < self.cfg.min_move_mm:
+                return False
+
+        self._last_sent_xy = xy2
+        self._busy = False
+        self._busy_until = 0.0
+
+        return True
+
+    # ---------------------------
+    # ROS call
+    # ---------------------------
+    def _call_run_skill_lookat(self, best: Dict[str, Any], stamp: Any) -> None:
         if not self.cli.service_is_ready():
-            self.get_logger().warn("'/run_skill' service not ready")
+            self.get_logger().warn(f"'{self.cfg.run_skill_service}' service not ready")
             return
 
+        xy = best.get("robot_xy")
+        target_xy = None
+        if isinstance(xy, (list, tuple)) and len(xy) >= 2:
+            target_xy = [float(xy[0]), float(xy[1])]
+
         params = {
+            # motion 쪽이 candidates를 찾는 경우 대비
+            "candidates": [best],
             "best": best,
+
+            # 어떤 구현은 target_xy만 보는 경우가 있음
+            "target_xy": target_xy,
+
             "stamp": stamp,
-            "z_mm": self.look_z_mm,
-            "rx": self.look_rx,
-            "ry": self.look_ry,
-            "rz": self.look_rz,
-            "offset_x": self.off_x_mm,
-            "offset_y": self.off_y_mm,
+
+            # look_at.py에서 offset만 쓰게 유지
+            "offset_x": self.cfg.off_x_mm,
+            "offset_y": self.cfg.off_y_mm,
         }
 
         req = RunSkill.Request()
@@ -180,10 +276,14 @@ class WebcamGate(Node):
             f"conf={best.get('conf')} hit={best.get('hit')} miss={best.get('miss')} robot_xy={best.get('robot_xy')}"
         )
 
+        # 동작 시작: 응답 올 때까지 잠금(안전 타임아웃 포함)
+        self._busy = True
+        self._busy_until = time.time() + 3.0   # 3초 타임아웃(원하면 env로 빼도 됨)
+        
         fut = self.cli.call_async(req)
         fut.add_done_callback(self._on_done)
 
-    def _on_done(self, fut):
+    def _on_done(self, fut) -> None:
         try:
             resp = fut.result()
         except Exception as e:
@@ -195,74 +295,70 @@ class WebcamGate(Node):
             f"message={getattr(resp,'message',None)} "
             f"confidence={getattr(resp,'confidence',None)}"
         )
+        
+        self._busy = False
+        self._busy_until = 0.0
 
-    # ---------- callback ----------
-    def cb(self, msg: String):
-        # 1) 수신 확인
-        self.get_logger().info(f"[GATE] RX len={len(msg.data)}")
-
+    # ---------------------------
+    # Callback
+    # ---------------------------
+    def cb(self, msg: String) -> None:
         now = time.time()
 
-        # 2) throttle
-        if (now - self._last_call_ts) < self.call_min_interval:
+        # throttle
+        if (now - self._last_call_ts) < self.cfg.call_min_interval:
             return
 
-        # 3) JSON 파싱
+        if self.cfg.debug:
+            self.get_logger().info(f"[GATE] RX len={len(msg.data)}")
+            
+        # busy: 이전 run_skill 응답 오기 전에는 새 호출 막기
+        if self._busy and now < self._busy_until:
+            return
+
+        # parse JSON
         try:
             data = json.loads(msg.data)
         except Exception as e:
             self.get_logger().warn(f"[GATE] JSON parse fail: {e}")
             return
 
-        # 4) 핵심 필드 로깅
         action_raw = data.get("recommended_action")
-        cands_raw = data.get("candidates")
-        self.get_logger().info(
-            f"[GATE] action={action_raw} candidates={len(cands_raw or [])}"
-        )
+        if not self._should_trigger_action(action_raw):
+            return
 
-        action = (action_raw or "idle").strip()
         stamp = data.get("stamp")
-        cands = cands_raw or []
+        cands_raw = data.get("candidates") or []
+        if self.cfg.debug:
+            self.get_logger().info(f"[GATE] action={action_raw} candidates={len(cands_raw)}")
 
-        # 5) look_at 계열만 실행
-        if action not in ("look_at", "inspect", "track", "look"):
-            return
-
-        # 6) candidates 필터
-        filtered = self._filter_candidates(cands)
+        # filter
+        filtered = self._filter_candidates(cands_raw)
         if not filtered:
-            if self._locked_track_id is not None:
-                self._locked_track_id = None
-                self._lock_until_ts = 0.0
+            # lock clear if no viable candidates
+            self._locked_track_id = None
+            self._lock_until_ts = 0.0
             return
 
-        # 7) 락 유지
-        best = None
+        # lock 유지
+        best: Optional[Dict[str, Any]] = None
         if self._locked_track_id is not None and now < self._lock_until_ts:
             locked = self._find_by_track(filtered, self._locked_track_id)
             if locked is not None:
                 best = locked
 
-        # 8) 새로 선택
+        # 새로 선택
         if best is None:
             best = self._pick_best(filtered)
             if best is None:
                 return
-            tid = best.get("track_id")
-            if tid is not None:
-                self._locked_track_id = int(tid)
-                self._lock_until_ts = now + self.lock_sec
+            self._update_lock(now, best)
 
-        # 9) min_move_mm 체크
-        xy = best.get("robot_xy")
-        xy2 = (float(xy[0]), float(xy[1]))
-        if self._last_sent_xy is not None:
-            if self._dist_mm(self._last_sent_xy, xy2) < self.min_move_mm:
-                return
-        self._last_sent_xy = xy2
+        # min move
+        if not self._passes_min_move(best):
+            return
 
-        # 10) call
+        # call
         self._call_run_skill_lookat(best, stamp)
         self._last_call_ts = now
 

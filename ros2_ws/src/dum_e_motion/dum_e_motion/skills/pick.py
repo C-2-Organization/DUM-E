@@ -47,7 +47,7 @@ def execute_pick_motion(ctx: MotionContext, x, y, z):
     # 접근
     ctx.motion.movel(
         approach_pos,
-        vel=ctx.LIN_VEL,
+        vel=ctx.LIN_VEL,    
         acc=ctx.LIN_ACC,
         mod=DR_MV_MOD_ABS,
         ra=DR_MV_RA_DUPLICATE,

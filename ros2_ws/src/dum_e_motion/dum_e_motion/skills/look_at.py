@@ -5,6 +5,7 @@ from geometry_msgs.msg import PoseStamped
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_motion.motion_context import MotionContext
 
+
 def _choose_best_candidate(candidates):
     # 1) in_table_roi True 우선
     in_roi = [c for c in candidates if c.get("in_table_roi") is True]
@@ -14,11 +15,18 @@ def _choose_best_candidate(candidates):
     pool.sort(key=lambda d: (float(d.get("hit", 0)), float(d.get("conf", 0.0))), reverse=True)
     return pool[0] if pool else None
 
-def execute_look_at(ctx: MotionContext, x_mm: float, y_mm: float, z_mm: float, rx: float, ry: float, rz: float):
-    from DSR_ROBOT2 import DR_MV_MOD_ABS, DR_MV_RA_DUPLICATE
+
+def execute_look_at(ctx: MotionContext, x_mm: float, y_mm: float, z_mm: float):
+    from DSR_ROBOT2 import DR_MV_MOD_ABS, DR_MV_RA_DUPLICATE, get_current_posx
     from DR_common2 import posx
 
-    ctx.node.get_logger().info(f"[LOOK_AT] movel base(mm)=({x_mm:.1f},{y_mm:.1f},{z_mm:.1f}) r=({rx},{ry},{rz})")
+    cur = get_current_posx()[0]
+    rx, ry, rz = cur[3], cur[4], cur[5]
+
+    ctx.node.get_logger().info(
+        f"[LOOK_AT] movel base(mm)=({x_mm:.1f},{y_mm:.1f},{z_mm:.1f}) "
+        f"r(cur)=({rx:.1f},{ry:.1f},{rz:.1f})"
+    )
 
     ctx.motion.movel(
         posx([x_mm, y_mm, z_mm, rx, ry, rz]),
@@ -28,6 +36,8 @@ def execute_look_at(ctx: MotionContext, x_mm: float, y_mm: float, z_mm: float, r
         ra=DR_MV_RA_DUPLICATE,
     )
 
+    ctx.motion.wait(0.2)
+
 def run_look_at_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str, float, PoseStamped]:
     """
     params_json 기대:
@@ -36,10 +46,11 @@ def run_look_at_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str,
         {"robot_xy":[x_mm,y_mm], "conf":0.3, "hit":3, "in_table_roi":true, ...},
         ...
       ],
-      "z_mm": 350.0,
-      "rx": 180.0, "ry": 0.0, "rz": 90.0,
+      "z_mm": 500.0,
       "offset_x": 0.0, "offset_y": 0.0
     }
+
+    - rx/ry/rz는 받더라도 사용하지 않습니다(현재 자세 유지).
     """
     if not cmd.params_json:
         return False, "params_json empty", 0.0, PoseStamped()
@@ -63,11 +74,8 @@ def run_look_at_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str,
 
     x_mm, y_mm = float(robot_xy[0]), float(robot_xy[1])
 
-    # 파라미터(단위 mm)
-    z_mm = float(params.get("z_mm", 350.0))
-    rx = float(params.get("rx", 180.0))
-    ry = float(params.get("ry", 0.0))
-    rz = float(params.get("rz", 90.0))
+    # ✅ 헴: look_at은 z 고정, r은 current_posx 사용
+    z_mm = 200.0
     offset_x = float(params.get("offset_x", 0.0))
     offset_y = float(params.get("offset_y", 0.0))
 
@@ -75,7 +83,7 @@ def run_look_at_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str,
     y_mm += offset_y
 
     try:
-        execute_look_at(ctx, x_mm, y_mm, z_mm, rx, ry, rz)
+        execute_look_at(ctx, x_mm, y_mm, z_mm)
         return True, "OK", float(best.get("conf", 1.0)), PoseStamped()
     except Exception as e:
         return False, f"look_at motion error: {e}", float(best.get("conf", 0.0)), PoseStamped()

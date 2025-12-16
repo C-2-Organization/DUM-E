@@ -1,4 +1,6 @@
 # webcam/workers/situation_worker.py
+from __future__ import annotations
+
 import os
 import threading
 import time
@@ -11,14 +13,13 @@ from webcam.services.table.hole_detector import detect_table_holes
 from webcam.services.vision.yolo_locator import YoloLocator
 from webcam.monitor_state import update_state, push_event
 
-from webcam.services.ros_bridge import PerceptionPublisherThread
-from webcam.services.ros_bridge.schema import build_perception_msg
+import rclpy
+from webcam.services.ros_bridge.target_pub import PerceptionPublisher
 
-# ✅ baseline(홀 id ↔ img(x,y) ↔ robot(x,y)) 로드
+# baseline(홀 id ↔ img(x,y) ↔ robot(x,y)) 로드 + KNN 추정
 from webcam.services.table.hole_robot_map import (
     load_holes_baseline,
-    estimate_robot_xy_knn_mean,
-    estimate_robot_xy_knn_idw,
+    estimate_robot_xy_from_center,
 )
 
 # =========================
@@ -35,15 +36,39 @@ frame_queue: "queue.Queue" = queue.Queue(maxsize=5)
 YOLO_MODEL = os.getenv("YOLO_MODEL_PATH", "/home/ilhoon/Tutorial/OD_Tutorial/YOLO_P/yolov8s-worldv2.pt")
 yolo = YoloLocator(model_path=YOLO_MODEL, conf=0.15, imgsz=1280, device="cpu")
 
-# ROS2 publish (webcam -> robot)
-_pub = None
+# =========================
+# ROS2: 프로세스당 1회 init + 퍼블리셔 전역 1개 유지
+# =========================
+_ROS_INIT_LOCK = threading.Lock()
+_ROS_INIT_DONE = False
 
-def _ensure_pub():
-    global _pub
-    if _pub is None:
-        _pub = PerceptionPublisherThread(topic="/dum_e/webcam/webcam")
-        _pub.start()
-    return _pub
+_PUB_LOCK = threading.Lock()
+_PUB_NODE: PerceptionPublisher | None = None
+_PUB_TOPIC = os.getenv("WEBCAM_PUB_TOPIC", "/dum_e/webcam/webcam")
+
+
+def ensure_ros_init() -> None:
+    """uvicorn/스레드 환경에서 rclpy.init 반복 호출 방지."""
+    global _ROS_INIT_DONE
+    if _ROS_INIT_DONE:
+        return
+    with _ROS_INIT_LOCK:
+        if _ROS_INIT_DONE:
+            return
+        if not rclpy.ok():
+            rclpy.init(args=None)
+        _ROS_INIT_DONE = True
+
+
+def get_pub_node() -> PerceptionPublisher:
+    """퍼블리셔 노드는 1개만 만들어 계속 재사용(중간 destroy/shutdown 금지)."""
+    global _PUB_NODE
+    with _PUB_LOCK:
+        if _PUB_NODE is None:
+            ensure_ros_init()
+            _PUB_NODE = PerceptionPublisher(topic=_PUB_TOPIC)
+        return _PUB_NODE
+
 
 # =========================
 # GPT worker (이상 프레임만)
@@ -85,14 +110,7 @@ def worker_loop():
 # Camera loop (실시간 상태 + ROS 전송)
 # =========================
 def camera_loop():
-
     def describe_between_holes(cx, cy, holes, radius, hole_safe=1.15):
-        """
-        holes: [(x,y), ...]  # hole_detector가 그리는 번호 순서가 holes 인덱스+1이라고 가정
-        radius: 숫자 or [r1,r2,...] (홀마다 반지름) or None
-
-        return: "8번 위에 있습니다" / "8~9번 사이에 있습니다" / None
-        """
         if not holes or len(holes) < 2:
             return None
 
@@ -132,13 +150,22 @@ def camera_loop():
     ROI_MARGIN = 30
     HOLE_SAFE = 1.15
 
-    # ✅ robot_xy 추정 파라미터 (KNN)
-    KNN_K = int(os.getenv("ROBOT_XY_KNN_K", "3"))          # 2 또는 3 추천
-    KNN_MODE = os.getenv("ROBOT_XY_KNN_MODE", "idw")       # "mean" | "idw"
-    IDW_POWER = float(os.getenv("ROBOT_XY_IDW_POWER", "1"))# 1.0 추천, 2.0은 더 쏠림
+    # robot_xy 추정 파라미터 (KNN)
+    KNN_K = int(os.getenv("ROBOT_XY_KNN_K", "3"))
+    KNN_MODE = os.getenv("ROBOT_XY_KNN_MODE", "idw")
+    IDW_POWER = float(os.getenv("ROBOT_XY_IDW_POWER", "1"))
+
+    # fallback: ROI -> robot 범위 (대충 값, env로 튜닝)
+    RX_MIN = float(os.getenv("ROI_TO_ROBOT_X_MIN", "-200"))
+    RX_MAX = float(os.getenv("ROI_TO_ROBOT_X_MAX", "200"))
+    RY_MIN = float(os.getenv("ROI_TO_ROBOT_Y_MIN", "-200"))
+    RY_MAX = float(os.getenv("ROI_TO_ROBOT_Y_MAX", "200"))
 
     push_event("CAM", "camera_loop start")
     cv2.namedWindow("Dum-E Situation Cam", cv2.WINDOW_NORMAL)
+
+    # 디버그 출력 주기
+    last_ros_log = 0.0
 
     try:
         while True:
@@ -184,20 +211,17 @@ def camera_loop():
             # 1) YOLO 탐지(여러 개) + enrich(ROI/between/robot_xy)
             # =========================
             yolo_state = {
-                # 대표 1개(모니터 ROI 문장 등 기존 호환)
                 "cls": None,
                 "conf": None,
                 "center": None,
                 "bbox": None,
                 "in_table_roi": None,
                 "between_holes": None,
-
-                # 다중 물체
                 "confirmed": [],
             }
 
             try:
-                confirmed = yolo.detect_confirmed(frame)  # ✅ 안정화된 것만
+                confirmed = yolo.detect_confirmed(frame)  # 안정화된 것만
                 enriched = []
 
                 for d in (confirmed or []):
@@ -212,24 +236,23 @@ def camera_loop():
                         if in_roi:
                             between = describe_between_holes(fx, fy, holes, radius, hole_safe=HOLE_SAFE)
 
-                    # ✅ robot_xy (KNN mean / KNN idw)
                     robot_xy = None
                     robot_dbg = None
-                    if cx is not None and cy is not None:
-                        if KNN_MODE.lower() == "mean":
-                            est = estimate_robot_xy_knn_mean(cx, cy, BASELINE_HOLES, k=KNN_K)
-                        else:
-                            est = estimate_robot_xy_knn_idw(cx, cy, BASELINE_HOLES, k=KNN_K, power=IDW_POWER)
 
+                    if cx is not None and cy is not None:
+                        est = estimate_robot_xy_from_center(
+                            cx,
+                            cy,
+                            BASELINE_HOLES,
+                            k=2,   # 사이값은 무조건 2
+                        )
                         if est:
-                            robot_xy = est.get("robot_xy")
+                            robot_xy = est["robot_xy"]
                             robot_dbg = {
-                                "neighbor_ids": est.get("neighbor_ids"),
-                                "pix_dists": est.get("pix_dists"),
-                                "weights": est.get("weights"),
-                                "k": est.get("k"),
-                                "mode": KNN_MODE,
+                                "k": est["k"],
+                                "neighbor_ids": est["neighbor_ids"],
                             }
+
 
                     d2 = dict(d)
                     d2["in_table_roi"] = bool(in_roi) if in_roi is not None else None
@@ -240,11 +263,11 @@ def camera_loop():
 
                 yolo_state["confirmed"] = enriched
 
-                # ✅ 대표 1개 선택: 테이블 위(in_roi=True) 우선, 없으면 첫 번째
+                # 대표 1개 선택
                 rep = None
-                for d in enriched:
-                    if d.get("in_table_roi") is True:
-                        rep = d
+                for dd in enriched:
+                    if dd.get("in_table_roi") is True:
+                        rep = dd
                         break
                 if rep is None and enriched:
                     rep = enriched[0]
@@ -269,32 +292,29 @@ def camera_loop():
 
             except Exception as e:
                 push_event("ERR", f"YOLO error: {e}")
+                # yolo_state는 직전 값 유지
 
-            # ✅ 모니터 상태 업데이트
             update_state({"yolo": yolo_state})
 
             # =========================
-            # 1.5) 대표 로봇 XY 상태(모니터 RobotXY 카드용)
+            # 1.5) 대표 로봇 XY 상태
             # =========================
             robot_target_xy = None
             robot_target_dbg = None
 
-            # 대표는 테이블 위 우선으로 뽑혔으니 그걸 사용
             rep_xy = None
             rep_dbg = None
             if yolo_state.get("confirmed"):
-                # yolo_state 대표 1개가 rep를 반영하므로, rep center/between 기반으로 찾기보단
-                # enriched에서 테이블 위 우선 후보를 그대로 다시 고르는 게 안전
-                for d in yolo_state["confirmed"]:
-                    if d.get("in_table_roi") is True and d.get("robot_xy") is not None:
-                        rep_xy = d.get("robot_xy")
-                        rep_dbg = d.get("robot_dbg")
+                for dd in yolo_state["confirmed"]:
+                    if dd.get("in_table_roi") is True and dd.get("robot_xy") is not None:
+                        rep_xy = dd.get("robot_xy")
+                        rep_dbg = dd.get("robot_dbg")
                         break
                 if rep_xy is None:
-                    for d in yolo_state["confirmed"]:
-                        if d.get("robot_xy") is not None:
-                            rep_xy = d.get("robot_xy")
-                            rep_dbg = d.get("robot_dbg")
+                    for dd in yolo_state["confirmed"]:
+                        if dd.get("robot_xy") is not None:
+                            rep_xy = dd.get("robot_xy")
+                            rep_dbg = dd.get("robot_dbg")
                             break
 
             if rep_xy is not None:
@@ -309,38 +329,72 @@ def camera_loop():
             # =========================
             # 2) ROS 전송: candidates + recommended_action
             # =========================
-            # ✅ 웹캠 단계 기본 룰:
-            # - 테이블 위 후보가 있으면 look_at
-            # - 없으면 idle
             candidates = []
-            for d in (yolo_state.get("confirmed") or [])[:5]:
+            for dd in (yolo_state.get("confirmed") or [])[:5]:
                 candidates.append({
-                    "track_id": d.get("track_id"),
-                    "cls_name": d.get("cls_name"),
-                    "conf": d.get("conf"),
-                    "hit": d.get("hit"),
-                    "miss": d.get("miss"),
-                    "center": d.get("center"),
-                    "bbox": d.get("bbox"),
-                    "in_table_roi": d.get("in_table_roi"),
-                    "between_holes": d.get("between_holes"),
-                    "robot_xy": d.get("robot_xy"),
+                    "track_id": dd.get("track_id"),
+                    "cls_name": dd.get("cls_name"),
+                    "conf": dd.get("conf"),
+                    "hit": dd.get("hit"),
+                    "miss": dd.get("miss"),
+                    "center": dd.get("center"),
+                    "bbox": dd.get("bbox"),
+                    "in_table_roi": dd.get("in_table_roi"),
+                    "between_holes": dd.get("between_holes"),
+                    "robot_xy": dd.get("robot_xy"),
+                    "robot_dbg": dd.get("robot_dbg"),
                 })
 
             has_table_obj = any(c.get("in_table_roi") is True for c in candidates)
             recommended_action = "look_at" if has_table_obj else ("idle" if not candidates else "look_at")
 
-            try:
-                msg = build_perception_msg(
-                    candidates=candidates,
-                    recommended_action=recommended_action,
-                    risk_level="low",
-                    human_present=False,
-                    hand_near_target=False,
-                )
-                _ensure_pub().publish(msg)
-            except Exception as e:
-                push_event("ERR", f"ROS publish error: {e}")
+            # best 1개 선정(ROI 우선, 없으면 첫번째)
+            best = None
+            for c in candidates:
+                if c.get("in_table_roi") is True:
+                    best = c
+                    break
+            if best is None and candidates:
+                best = candidates[0]
+
+            msg = {
+                "stamp": time.time(),
+                "source": "webcam",
+                "recommended_action": recommended_action,
+                "risk_level": "low",
+                "human_present": False,
+                "hand_near_target": False,
+                "best": best,
+                "candidates": candidates,
+            }
+            
+            # =========================
+            # 2.5) ROS publish rate limit (예: 5Hz)
+            # =========================
+            if not hasattr(camera_loop, "_last_pub"):
+                camera_loop._last_pub = 0.0
+
+            if now - camera_loop._last_pub < 0.2:   # 0.2초=5Hz
+                # publish만 스킵하고, 아래 overlay/키입력은 계속 돌려도 됨
+                # (진짜로 전체 루프를 느리게 하고 싶으면 continue를 아래로 옮기면 됨)
+                pass
+            else:
+                camera_loop._last_pub = now
+
+                # 디버그: 2초마다 구독자 수 확인
+                if now - last_ros_log > 2.0:
+                    last_ros_log = now
+                    try:
+                        sub_cnt = get_pub_node().pub.get_subscription_count()
+                    except Exception:
+                        sub_cnt = -1
+                    print(f"[ROS PUB] topic={_PUB_TOPIC} subs={sub_cnt} candidates={len(candidates)} action={recommended_action}")
+
+                try:
+                    get_pub_node().publish_dict(msg)
+                except Exception as e:
+                    push_event("ERR", f"ROS publish error: {e}")
+                    print("[ROS publish error]", e)
 
             # =========================
             # 3) 모션 감지 -> 큐 (GPT용)
@@ -358,11 +412,11 @@ def camera_loop():
             update_state({"queue_size": frame_queue.qsize(), "queue_dropped": dropped})
 
             # =========================
-            # 4) 오버레이 (여러 개 전부 그리기)
+            # 4) 오버레이
             # =========================
-            for d in yolo_state.get("confirmed", []):
-                bbox = d.get("bbox")
-                center = d.get("center")
+            for dd in yolo_state.get("confirmed", []):
+                bbox = dd.get("bbox")
+                center = dd.get("center")
                 if bbox:
                     x1, y1, x2, y2 = [int(v) for v in bbox]
                     cv2.rectangle(debug_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
@@ -380,11 +434,14 @@ def camera_loop():
     finally:
         cam.release()
         cv2.destroyAllWindows()
+        # 여기서 destroy/shutdown 하지 않는다 (uvicorn에서 꼬임 방지)
 
 
 def start_worker_and_camera():
+    # GPT worker 1개
     threading.Thread(target=worker_loop, daemon=True).start()
 
+    # camera loop 1개
     def _cam_safe():
         try:
             camera_loop()
