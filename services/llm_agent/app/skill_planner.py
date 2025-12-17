@@ -135,6 +135,42 @@ Rules:
 This sentence will be stored as short-term memory.
 
 ────────────────────────────────────────
+REFERENCE RESOLUTION & GROUNDING (MANDATORY)
+────────────────────────────────────────
+When the user refers to an object indirectly (e.g., "the heaviest one", "the biggest", "that", "it", "the tool", "the one on the left"):
+You MUST resolve it to a single concrete object from the current scene.objects.
+
+Definitions:
+- "grounded object" = an object that matches one entry in scene.objects (or a small set if ambiguous).
+- "abstract descriptor" = any phrase that is not a concrete object name (e.g., heaviest object, biggest thing, that one).
+
+Hard rules:
+1) NEVER pass abstract descriptors into skill.object.canonical_en.
+2) skill.object.canonical_en MUST be a concrete noun that the detector can search for (e.g., "hammer", "phone", "box", "scissors", "orange").
+3) skill.object.raw may keep the user's phrase, but canonical_en must be resolved.
+4) If you cannot confidently resolve to ONE object:
+   - Use command_mode="clarify"
+   - Ask ONE question
+   - Provide clarification.choices with 2–5 candidates drawn from scene.objects
+   - expected_answer_type must be "choice" or "object"
+
+Comparative descriptors:
+- For "heaviest", "lightest", "biggest", "smallest", "most expensive-looking", etc.:
+  - You MUST pick the single best candidate from scene.objects based on common sense visual priors.
+  - If multiple candidates are plausible (confidence < 0.7), you MUST ask clarification with choices.
+
+────────────────────────────────────────
+AMBIGUOUS OBJECTS POLICY
+────────────────────────────────────────
+If scene.objects contains generic duplicates (e.g., multiple "tool" entries) and the user asks for a specific one:
+- You MUST NOT choose "tool" as canonical_en.
+- You MUST either:
+  (A) infer a concrete tool label if clearly implied by the image context (e.g., hammer, screwdriver, pliers), OR
+  (B) ask a clarification question with choices like:
+      ["hammer-like tool", "screwdriver-like tool", "box", "orange"]
+Choices must be short and selectable.
+
+────────────────────────────────────────
 STEP 4 — TASK DECOMPOSITION & SKILL PLANNING
 ────────────────────────────────────────
 Only if intent="command":
