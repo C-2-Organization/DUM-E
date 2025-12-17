@@ -9,10 +9,7 @@ from dum_e_motion.motion_context import MotionContext
 
 
 # 기본 파라미터 (단위: mm / sec)
-HANDOVER_CONF_TH = 0.20  # handover는 초기엔 좀 낮게 시작(원하면 올려)
-DEFAULT_PRE_X_OFFSET = -80.0   # 손 위치에서 x로 뒤로 80mm (base 기준)
-DEFAULT_PRE_Z_OFFSET = 100.0   # 손 위치에서 위로 100mm
-DEFAULT_APPROACH_Z_OFFSET = 30.0  # 손 위 30mm까지 접근
+HANDOVER_CONF_TH = 0
 DEFAULT_WAIT_SEC = 1.5
 
 
@@ -22,14 +19,11 @@ def execute_handover_motion(
     y: float,
     z: float,
     *,
-    pre_x_offset: float,
-    pre_z_offset: float,
-    approach_z_offset: float,
     wait_sec: float,
 ) -> None:
     """
-    Handover 모션:
-    - prepose(위/뒤) → approach(천천히) → wait → open → retreat(prepose)
+    Handover 모션 (단일 접근 버전):
+    - approach(천천히 1번) → wait → open
     좌표 단위는 Doosan posx와 맞춰 mm 기준.
     """
     from DSR_ROBOT2 import (
@@ -46,55 +40,28 @@ def execute_handover_motion(
     current_pos = get_current_posx()[0]
     rx, ry, rz = current_pos[3], current_pos[4], current_pos[5]
 
-    # prepose (base 기준 오프셋)
-    prepose = posx([
-        x + pre_x_offset,
-        y,
-        z + pre_z_offset,
-        rx, ry, rz,
-    ])
-
-    # approach (손 위쪽 약간 남기고)
-    approach = posx([
+    target = posx([
         x,
         y,
-        z + approach_z_offset,
+        z,
         rx, ry, rz,
     ])
 
-    # 1) prepose
+    # 1) target로 한 번만 이동 (사람 앞이니까 느리게)
     ctx.motion.movel(
-        prepose,
-        vel=ctx.LIN_VEL,
-        acc=ctx.LIN_ACC,
-        mod=DR_MV_MOD_ABS,
-        ra=DR_MV_RA_DUPLICATE,
-    )
-
-    # 2) approach (사람 앞이니까 느리게)
-    ctx.motion.movel(
-        approach,
+        target,
         vel=[50.0, 80.0],
         acc=[50.0, 50.0],
         mod=DR_MV_MOD_ABS,
         ra=DR_MV_RA_DUPLICATE,
     )
 
-    # 3) wait
+    # 2) wait
     ctx.motion.wait(wait_sec)
 
-    # 4) release
+    # 3) release
     ctx.motion.open_gripper()
     ctx.motion.wait(0.5)
-
-    # 5) retreat
-    ctx.motion.movel(
-        prepose,
-        vel=ctx.LIN_VEL,
-        acc=ctx.LIN_ACC,
-        mod=DR_MV_MOD_ABS,
-        ra=DR_MV_RA_DUPLICATE,
-    )
 
 
 def run_handover_skill(
@@ -105,7 +72,7 @@ def run_handover_skill(
     HANDOVER 스킬 실행:
       - perception에 "handover" pose 요청 (또는 cmd.target_pose 사용)
       - camera_link → base 좌표 변환 (ctx.transform_camera_to_base)
-      - 접근/대기/오픈/리트랙트 수행
+      - 단일 접근/대기/오픈 수행
       - (success, message, confidence, final_pose) 반환
     """
 
@@ -140,22 +107,14 @@ def run_handover_skill(
 
         cam_pose = pose_resp.pose
 
-    # 2) params_json 파싱
-    pre_x_offset = DEFAULT_PRE_X_OFFSET
-    pre_z_offset = DEFAULT_PRE_Z_OFFSET
-    approach_z_offset = DEFAULT_APPROACH_Z_OFFSET
+    # 2) params_json 파싱 (단일 파라미터만 유지)
     wait_sec = DEFAULT_WAIT_SEC
 
     if params_json:
         try:
             params = json.loads(params_json)
             ctx.node.get_logger().info(f"[HANDOVER] params_json = {params}")
-
-            pre_x_offset = float(params.get("pre_x_offset", pre_x_offset))
-            pre_z_offset = float(params.get("pre_z_offset", pre_z_offset))
-            approach_z_offset = float(params.get("approach_z_offset", approach_z_offset))
             wait_sec = float(params.get("wait_sec", wait_sec))
-
         except json.JSONDecodeError:
             ctx.node.get_logger().warn(f"[HANDOVER] params_json 파싱 실패: {params_json}")
 
@@ -179,9 +138,6 @@ def run_handover_skill(
         execute_handover_motion(
             ctx,
             bx, by, bz,
-            pre_x_offset=pre_x_offset,
-            pre_z_offset=pre_z_offset,
-            approach_z_offset=approach_z_offset,
             wait_sec=wait_sec,
         )
         success = True

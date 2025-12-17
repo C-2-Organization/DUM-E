@@ -170,7 +170,7 @@ Important Rules:
    - "HANDOVER": Hands over the currently held object to a human.
      - This skill approaches the human hand position estimated by perception and opens the gripper to release the object.
      - Typical usage examples:
-       - "come on", "come on dummy", "come on dum-e", "hand it to me", "give it to me"
+       - "hand it to me", "give it to me"
        - "줘", "건네줘", "내 손에 줘", "여기 줘"
      - object:
        - Not required for HANDOVER. Set object.raw and object.canonical_en to null.
