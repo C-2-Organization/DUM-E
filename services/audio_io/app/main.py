@@ -20,8 +20,10 @@ from .wakeword import WakeupWord, start_wakeword_loop
 from .stt import StreamingSTT
 from .tts import TTS
 from .jarvis_assistant import JarvisAssistant
+from .webcam import capture_webcam_jpeg, jpeg_bytes_to_data_url
+from .context_memory import ContextMemory
 
-from services.llm_agent.app.skill_planner import plan_skill_flow
+from services.llm_agent.app.skill_planner import plan_skill_flow, analyze_scene_only
 from services.llm_agent.ros_bridge import call_run_skill
 from dum_e_interfaces.msg import SkillCommand
 
@@ -123,6 +125,10 @@ COMPLETE_RESPONSES = [
     "Complete. Standing by for your next command.",
 ]
 
+ctx_mem = ContextMemory(maxlen=5)
+
+_pending_clarify: dict | None = None
+
 def _is_robot_already_running() -> bool:
     """
     이미 ros2 launch가 떠 있는지 간단히 체크.
@@ -169,6 +175,9 @@ def _request_skill_stop():
     현재 실행 중인 스킬/모션을 중단해달라는 요청을 ROS 쪽으로 보낸다.
     """
     print("[AudioIO] 🛑 STOP 요청을 ROS로 전송합니다.")
+
+    global _pending_clarify
+    _pending_clarify = None
 
     try:
         cmd = [
@@ -397,20 +406,79 @@ def _run_single_command_flow(
 
         # 1) STT 실행 (blocking)
         user_text = transcribe_fn()
+        raw_user_text = user_text
         print(f"[AudioIO] 🎙 사용자가 말한 내용: '{user_text}'")
 
         if not user_text.strip():
             print("[AudioIO] ⚠ STT 결과가 비어있음. 다시 대기.")
             return
 
-        ack_msg = random.choice(COMMAND_ACK_RESPONSES)
-        print(f"[AudioIO] 💬 Command ack: {ack_msg}")
-        tts.speak(ack_msg)
-        time.sleep(1.0)
-
-        # 2) Planner 호출: 자연어 → 스킬 플로우(JSON)
+        # 2) 웹캠 캡쳐 → LLM 입력에 포함 / 재질문 여부 확인
+        image_data_url = None
         try:
-            plan = plan_skill_flow(user_text)
+            jpg_bytes, saved_path = capture_webcam_jpeg()
+            image_data_url = jpeg_bytes_to_data_url(jpg_bytes)
+            if saved_path:
+                print(f"[AudioIO] 📷 Webcam captured: {saved_path}")
+        except Exception as e:
+            print(f"[AudioIO] ⚠ Webcam capture failed (continue without image): {e}")
+
+        global _pending_clarify
+
+        if _pending_clarify is not None:
+            age = time.time() - float(_pending_clarify.get("timestamp", 0))
+            if age > 60.0:   # 60초 예시
+                _pending_clarify = None
+            # 사용자의 이번 발화는 "이전 질문에 대한 답"으로 취급
+            user_text = (
+                "FOLLOW-UP ANSWER TO YOUR LAST CLARIFICATION.\n"
+                f"Previous command: {_pending_clarify.get('original_user_text','')}\n"
+                f"You asked: {_pending_clarify.get('question','')}\n"
+                f"User answer: {user_text}\n"
+                "Now infer the full intended robot command and produce the final plan.\n"
+            )
+
+        # 3) Planner 호출: 자연어(+이미지) → 스킬 플로우(JSON)
+        try:
+            mem = ctx_mem.snapshot()
+            plan = plan_skill_flow(
+                user_text,
+                scene_image_url=image_data_url,
+                memory_context=mem,
+            )
+
+            context_update = (plan.get("context_update") or "").strip()
+            if context_update:
+                ctx_mem.push(context_update)
+                print(f"[AudioIO] 🧠 Context saved ({len(ctx_mem.snapshot())}/5): {context_update}")
+            else:
+                print("[AudioIO] ⚠ No context_update returned by planner")
+
+            intent = (plan.get("intent") or "").lower().strip()
+
+            # 1) chat이면 대화 답변
+            if intent == "chat":
+                _pending_clarify = None
+                reply = (plan.get("chat_reply") or "").strip() or "Understood, sir."
+                tts.speak(reply)
+                return
+
+            # 2) command인데 clarify면 질문만 하고 종료
+            mode = (plan.get("command_mode") or "").lower().strip()
+            if intent == "command" and mode == "clarify":
+                clar = plan.get("clarification") or {}
+                _pending_clarify = {
+                    "question": (clar.get("question") or "").strip(),
+                    "expected_answer_type": clar.get("expected_answer_type"),
+                    "choices": clar.get("choices"),
+                    "original_user_text": raw_user_text,          # 지금 턴의 원래 명령
+                    "scene_summary": (plan.get("scene") or {}).get("summary", ""),
+                    "timestamp": time.time(),
+                }
+
+                q = _pending_clarify["question"] or "Could you clarify, sir?"
+                tts.speak(q)
+                return
         except Exception as e:
             print(f"[AudioIO] ❌ Planner 에러: {e}")
             try:
@@ -430,7 +498,7 @@ def _run_single_command_flow(
         user_message = plan.get("user_message") or ""
 
         if not can_execute:
-            # 3-A) 현재 스킬셋으로는 수행 불가능한 명령
+            # 4-A) 현재 스킬셋으로는 수행 불가능한 명령
             msg = user_message or "Process execution failed."
             print(f"[AudioIO] ❌ Process execution failed: {msg}")
 
@@ -440,7 +508,12 @@ def _run_single_command_flow(
                 print(f"[AudioIO] ❌ TTS 에러: {e}")
 
         else:
-            # 3-B) 수행 가능한 경우 → 실제 ROS 스킬 실행
+            ack_msg = random.choice(COMMAND_ACK_RESPONSES)
+            print(f"[AudioIO] 💬 Command ack: {ack_msg}")
+            tts.speak(ack_msg)
+            time.sleep(1.0)
+
+            # 4-B) 수행 가능한 경우 → 실제 ROS 스킬 실행
             executed = _execute_plan(plan)
 
             if not executed:
@@ -476,6 +549,37 @@ def _handle_text_high_priority(user_text: str) -> bool:
         except Exception:
             pass
         return True
+
+    global _pending_clarify
+
+    try:
+        mem = ctx_mem.snapshot()
+        plan = plan_skill_flow(user_text, scene_image_url=None, memory_context=mem)
+        context_update = (plan.get("context_update") or "").strip()
+        if context_update:
+            ctx_mem.push(context_update)
+
+        intent = (plan.get("intent") or "").lower().strip()
+
+        # 1) chat이면 대화 답변
+        if intent == "chat":
+            _pending_clarify = None
+            reply = (plan.get("chat_reply") or "").strip() or "Understood, sir."
+            tts.speak(reply)
+            return
+
+        # 2) command인데 clarify면 질문만 하고 종료
+        mode = (plan.get("command_mode") or "").lower().strip()
+        if intent == "command" and mode == "plan":
+            _pending_clarify = None
+        if intent == "command" and mode == "clarify":
+            q = ((plan.get("clarification") or {}).get("question") or "").strip()
+            if not q:
+                q = "Could you clarify, sir?"
+            tts.speak(q)
+            return
+    except Exception as e:
+        print(f"[AudioIO] ⚠ busy chat 처리 실패: {e}")
 
     return False
 
@@ -690,3 +794,26 @@ def record_wav():
         media_type="audio/wav",
         headers={"Content-Disposition": 'attachment; filename="record.wav"'},
     )
+
+@app.get("/webcam_snapshot")
+def webcam_snapshot():
+    try:
+        jpg_bytes, _ = capture_webcam_jpeg()
+        return Response(content=jpg_bytes, media_type="image/jpeg")
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/scene_probe")
+def scene_probe():
+    """
+    웹캠 캡쳐 1장 → LLM에 넣어서 scene만 반환 (ROS 실행 안 함)
+    """
+    jpg_bytes, saved_path = capture_webcam_jpeg()
+    img_url = jpeg_bytes_to_data_url(jpg_bytes)
+
+    result = analyze_scene_only(img_url)
+
+    # 디버깅용: 어디 저장됐는지 같이 보고 싶으면 아래처럼 추가 가능
+    result["_debug"] = {"saved_path": saved_path}
+
+    return result
