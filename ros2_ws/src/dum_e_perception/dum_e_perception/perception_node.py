@@ -44,11 +44,11 @@ class PerceptionNode(Node):
         self.prev_gray = None       # 이전 프레임 (Gray)
         self.track_point = None     # 추적 중인 중심점 좌표 (numpy array)
         self.track_wh = None        # 추적 중인 물체의 크기 (w, h) - Depth 계산용
-        self.tracking_object_name = None 
-        
+        self.tracking_object_name = None
+
         # Lucas-Kanade 파라미터
         self.lk_params = dict(
-            winSize=(21, 21), 
+            winSize=(21, 21),
             maxLevel=3,
             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
         )
@@ -119,7 +119,7 @@ class PerceptionNode(Node):
             response.success = False
             response.message = "Frames not ready"
             return response
-        
+
         h_img, w_img = color.shape[:2]
         gray_frame = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
 
@@ -131,9 +131,9 @@ class PerceptionNode(Node):
         # 1. Point Tracking 시도 (Optical Flow)
         # ---------------------------------------------------------
         # 조건: 이전 포인트 존재, 이전 프레임 존재, 타겟 이름 일치, 트래킹 요청
-        if (self.track_point is not None and 
+        if (self.track_point is not None and
             self.prev_gray is not None and
-            self.tracking_object_name == target_name and 
+            self.tracking_object_name == target_name and
             use_tracking):
 
             # Lucas-Kanade Optical Flow 계산
@@ -145,16 +145,16 @@ class PerceptionNode(Node):
             if st[0] == 1:
                 # 새 좌표 업데이트
                 new_cx, new_cy = p1[0].ravel()
-                
+
                 # 경계 밖으로 나갔는지 체크
                 if 0 <= new_cx < w_img and 0 <= new_cy < h_img:
                     self.track_point = p1 # 상태 업데이트
-                    
+
                     # 3D Depth 계산을 위해 BBox 복원 (중심점은 이동, 크기는 고정 가정)
                     saved_w, saved_h = self.track_wh
                     t_x = int(new_cx - saved_w / 2)
                     t_y = int(new_cy - saved_h / 2)
-                    
+
                     # Normalized BBox 생성
                     bbox_norm = self._xywh_to_norm((t_x, t_y, saved_w, saved_h), w_img, h_img)
                     source_method = "TRACK_POINT"
@@ -169,10 +169,10 @@ class PerceptionNode(Node):
         # ---------------------------------------------------------
         if bbox_norm is None:
             # 트래킹 상태 리셋
-            self.track_point = None 
-            
+            self.track_point = None
+
             best_det = self._detect_remote_best(color, target_name)
-            
+
             if best_det is not None:
                 bbox_norm = best_det.get("bbox")
                 confidence = float(best_det.get("confidence", 0.0))
@@ -182,11 +182,11 @@ class PerceptionNode(Node):
                 if bbox_norm is not None:
                     # Normalized -> Pixel
                     px, py, pw, ph = self._norm_to_xywh(bbox_norm, w_img, h_img)
-                    
+
                     # 중심점 계산
                     cx = px + pw / 2.0
                     cy = py + ph / 2.0
-                    
+
                     # 상태 저장
                     self.track_point = np.array([[cx, cy]], dtype=np.float32)
                     self.track_wh = (pw, ph)
@@ -230,7 +230,7 @@ class PerceptionNode(Node):
         response.message = f"ok ({source_method})"
         response.pose = pose_msg
         response.confidence = confidence
-        
+        response.bbox_norm = [float(v) for v in bbox_norm]
         return response
 
 
@@ -238,7 +238,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = PerceptionNode()
     node.get_logger().info("=== dum_e_perception (Point Tracking) Started ===")
-    
+
     try:
         rclpy.spin(node)
     finally:

@@ -1,5 +1,5 @@
 # dum_e_motion/skills/pick.py
-import json
+import math
 from typing import Tuple
 
 from geometry_msgs.msg import PoseStamped
@@ -8,194 +8,195 @@ from dum_e_interfaces.msg import SkillCommand
 from dum_e_motion.motion_context import MotionContext
 
 
-PICK_CONF_TH = 0.3  # perception에서 넘어온 confidence가 이보다 낮으면 pick 안 함
-GRIPPER_OFFSET = 215
+# ==============================================================================
+# 설정 및 상수
+# ==============================================================================
+PICK_CONF_TH = 0.3
+GRIPPER_OFFSET = 215  # mm, 그리퍼 오프셋
 
-# ------------------------------------------------------------------
-# Doosan + RG2 pick 모션
-# ------------------------------------------------------------------
-def execute_pick_motion(ctx: MotionContext, x, y, z):
+
+# ==============================================================================
+# 휴리스틱 기반 Grasp 계산
+# ==============================================================================
+def compute_grasp_from_bbox(
+    bbox_norm: Tuple[float, float, float, float],
+    pose: PoseStamped,
+    logger
+) -> Tuple[PoseStamped, float]:
     """
-    접근 → 잡기 → 홈
+    bbox와 중심 pose로부터 grasp pose와 각도 계산
+
+    휴리스틱:
+    1. 위치: bbox 중심의 depth 좌표 사용
+    2. 각도: bbox의 짧은 축에 수직 (긴 축 방향으로 그리퍼 정렬)
+
+    Returns:
+        (grasp_pose, angle_rad)
     """
-    from DSR_ROBOT2 import (
-        DR_MV_MOD_ABS,
-        DR_MV_RA_DUPLICATE,
-        get_current_posx,
+    x1, y1, x2, y2 = bbox_norm
+
+    # bbox 크기 계산 (normalized 좌표)
+    bbox_w = x2 - x1
+    bbox_h = y2 - y1
+
+    # 짧은 축 방향에 수직 = 긴 축 방향으로 그리퍼 정렬
+    # bbox가 가로로 긴 경우 (w > h): 그리퍼를 가로 방향 (0도)
+    # bbox가 세로로 긴 경우 (h > w): 그리퍼를 세로 방향 (90도)
+    if bbox_w >= bbox_h:
+        angle_rad = 0.0  # 가로 방향
+    else:
+        angle_rad = math.pi / 2  # 세로 방향 (90도)
+
+    logger.info(
+        f"[HEURISTIC] bbox size: w={bbox_w:.3f}, h={bbox_h:.3f}, "
+        f"angle={math.degrees(angle_rad):.1f}°"
     )
+
+    # pose는 그대로 사용 (Perception에서 받은 중심점)
+    grasp_pose = PoseStamped()
+    grasp_pose.header = pose.header
+    grasp_pose.pose.position = pose.pose.position
+
+    # orientation: Z축 회전만 적용
+    grasp_pose.pose.orientation.x = 0.0
+    grasp_pose.pose.orientation.y = 0.0
+    grasp_pose.pose.orientation.z = math.sin(angle_rad / 2.0)
+    grasp_pose.pose.orientation.w = math.cos(angle_rad / 2.0)
+
+    return grasp_pose, angle_rad
+
+
+def normalize_angle(angle_deg: float) -> float:
+    """각도를 -180 ~ 180 범위로 정규화"""
+    while angle_deg > 180:
+        angle_deg -= 360
+    while angle_deg < -180:
+        angle_deg += 360
+    return angle_deg
+
+
+# ==============================================================================
+# 로봇 모션 실행 함수
+# ==============================================================================
+def execute_pick_motion(ctx: MotionContext, x, y, z, target_yaw_rad=None):
+    from DSR_ROBOT2 import DR_MV_MOD_ABS, DR_MV_RA_DUPLICATE, get_current_posx
     from DR_common2 import posx
 
-    ctx.node.get_logger().info(
-        f"[MOVE] Pick → base({x:.3f}, {y:.3f}, {z:.3f})"
-    )
+    ctx.node.get_logger().info(f"[MOVE] Pick → base({x:.3f}, {y:.3f}, {z:.3f})")
 
     current_pos = get_current_posx()[0]
 
-    # 그리퍼 오픈
+    # 목표 회전값 (Rz)
+    if target_yaw_rad is not None:
+        raw_rz = math.degrees(target_yaw_rad)
+        next_rz = normalize_angle(raw_rz)
+        ctx.node.get_logger().info(f"[MOVE] Gripper angle: {next_rz:.1f}°")
+    else:
+        next_rz = current_pos[5]
+
+    # 1. 그리퍼 오픈
     ctx.motion.open_gripper()
-    ctx.motion.wait(1)
+    ctx.motion.wait(0.5)
 
-    approach_pos = posx([
-        x,
-        y,
-        z,
-        current_pos[3],
-        current_pos[4],
-        current_pos[5],
-    ])
+    approach_pos = posx([x, y, z, current_pos[3], current_pos[4], next_rz])
 
-    # 접근
-    ctx.motion.movel(
-        approach_pos,
-        vel=ctx.LIN_VEL,
-        acc=ctx.LIN_ACC,
-        mod=DR_MV_MOD_ABS,
-        ra=DR_MV_RA_DUPLICATE,
-    )
+    # 2. 접근
+    ctx.motion.movel(approach_pos, vel=ctx.LIN_VEL, acc=ctx.LIN_ACC, mod=DR_MV_MOD_ABS, ra=DR_MV_RA_DUPLICATE)
 
-    # 집기
+    # 3. 집기
     ctx.motion.close_gripper()
-    ctx.motion.wait(1)
+    ctx.motion.wait(0.8)
 
-    # 홈으로
-    ctx.motion.movej(
-        ctx.CUSTOM_HOME_JOINT,
-        vel=ctx.JNT_VEL,
-        acc=ctx.JNT_ACC,
-        mod=DR_MV_MOD_ABS,
-        ra=DR_MV_RA_DUPLICATE,
-    )
+    # 4. 들어 올리기
+    lift_pos = list(approach_pos)
+    lift_pos[2] += 100  # 100mm 상승
+    lift_pos = posx(lift_pos)
+    ctx.motion.movel(lift_pos, vel=ctx.LIN_VEL, acc=ctx.LIN_ACC, mod=DR_MV_MOD_ABS, ra=DR_MV_RA_DUPLICATE)
 
-# ------------------------------------------------------------------
-# Pick service call example
-# ------------------------------------------------------------------
-# ros2 service call /run_skill dum_e_interfaces/srv/RunSkill "{
-#   command: {
-#     skill_type: 0,
-#     object_name: 'scissors',
-#     target_pose: {
-#       header: {frame_id: ''},
-#       pose: {
-#         position: {x: 0.0, y: 0.0, z: 0.0},
-#         orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
-#       }
-#     },
-#     params_json: ''
-#   }
-# }"
+    # 5. 홈 이동
+    ctx.motion.movej(ctx.CUSTOM_HOME_JOINT, vel=ctx.JNT_VEL, acc=ctx.JNT_ACC, mod=DR_MV_MOD_ABS, ra=DR_MV_RA_DUPLICATE)
 
-def run_pick_skill(
-    cmd: SkillCommand,
-    ctx: MotionContext,
-) -> Tuple[bool, str, float, PoseStamped]:
-    """
-    PICK 스킬 실행:
-      - cmd.object_name / cmd.target_pose / cmd.params_json 사용
-      - 필요 시 perception에 pose 요청
-      - camera_link → base 좌표 변환
-      - Doosan + RG2로 pick 모션 실행
-      - (success, message, confidence, final_pose) 반환
-    """
+
+# ==============================================================================
+# 메인 스킬 함수 (Entry Point)
+# ==============================================================================
+def run_pick_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str, float, PoseStamped]:
     object_name = cmd.object_name.strip()
-    params_json = cmd.params_json
 
     if not object_name:
-        msg = "object_name is empty"
-        ctx.node.get_logger().warn(f"[PICK] {msg}")
-        return False, msg, 0.0, PoseStamped()
+        return False, "object_name is empty", 0.0, PoseStamped()
 
-    ctx.node.get_logger().info(
-        f"[PICK] skill 실행: object_name='{object_name}'"
-    )
+    ctx.node.get_logger().info(f"[PICK] Start Skill: '{object_name}'")
 
-    # 1) target_pose가 이미 주어졌는지 확인 (frame_id가 비어있지 않으면 사용)
+    cam_pose = None
+    confidence = 0.0
+    grasp_angle_rad = 0.0
+
+    # ------------------------------------------------------------------
+    # CASE A: 외부 Target Pose 사용 (직접 좌표 지정)
+    # ------------------------------------------------------------------
     if cmd.target_pose.header.frame_id:
         cam_pose = cmd.target_pose
-        confidence = 1.0  # 외부에서 pose를 신뢰한다고 가정
-        ctx.node.get_logger().info(
-            f"[PICK] 외부 제공 target_pose 사용 (frame_id={cam_pose.header.frame_id})"
-        )
+        confidence = 1.0
+        grasp_angle_rad = 0.0
+        ctx.node.get_logger().info("[PICK] Using external target pose")
+
+    # ------------------------------------------------------------------
+    # CASE B: Perception + Heuristic 기반 (기본 모드)
+    # ------------------------------------------------------------------
     else:
-        # perception에 pose 요청
         pose_resp = ctx.request_object_pose(object_name)
-        if pose_resp is None:
-            msg = "get_object_pose call failed"
-            ctx.node.get_logger().error(msg)
-            return False, msg, 0.0, PoseStamped()
+        if not pose_resp or not pose_resp.success:
+            return False, f"Perception failed for '{object_name}'", 0.0, PoseStamped()
 
         confidence = float(pose_resp.confidence)
-
-        if not pose_resp.success:
-            msg = f"get_object_pose 실패: {pose_resp.message}"
-            ctx.node.get_logger().warn(msg)
-            return False, msg, confidence, PoseStamped()
-
         if confidence < PICK_CONF_TH:
-            msg = (
-                f"conf={confidence:.2f} < PICK_CONF_TH={PICK_CONF_TH:.2f}, pick skip"
-            )
-            ctx.node.get_logger().warn(msg)
-            return False, msg, confidence, PoseStamped()
+            return False, f"Low confidence {confidence:.2f}", confidence, PoseStamped()
 
-        cam_pose = pose_resp.pose
-
-    # params_json 파싱 (나중에 tilt, offset 등에 활용 가능)
-    if params_json:
-        try:
-            params = json.loads(params_json)
-            ctx.node.get_logger().info(f"[PICK] params_json = {params}")
-        except json.JSONDecodeError:
-            ctx.node.get_logger().warn(
-                f"[PICK] params_json 파싱 실패: {params_json}"
-            )
-
-    # 2) camera_link → base 좌표 변환
-    # cam_pose는 "물체 중심 좌표" (카메라 기준)
-    # TCP(그리퍼 베이스)는 물체보다 카메라 쪽으로 205mm 뒤에 있어야 하므로,
-    # 카메라 프레임에서 z축으로 205mm 빼준 위치를 TCP 목표로 사용.
-    tcp_cam_pose = PoseStamped()
-    tcp_cam_pose.header = cam_pose.header  # frame_id='camera_link' 유지
-    tcp_cam_pose.pose = cam_pose.pose
-
-    # RealSense 기준: +Z가 카메라 앞 방향이라고 가정.
-    # 그리퍼가 카메라 앞쪽으로 205mm 나와 있으니,
-    # TCP는 물체보다 카메라 쪽으로 205mm 뒤에 있어야 한다 → z -= 205
-    tcp_cam_pose.pose.position.z -= GRIPPER_OFFSET
-
-    # 혹시 depth가 205mm보다 작은 비정상적인 경우 방어
-    if tcp_cam_pose.pose.position.z <= 0.0:
-        msg = (
-            f"computed tcp_cam_pose.z={tcp_cam_pose.pose.position.z:.3f} <= 0.0, "
-            f"invalid for GRIPPER_OFFSET={GRIPPER_OFFSET}"
+        # bbox가 있으면 휴리스틱으로 각도 계산
+        has_bbox = (
+            hasattr(pose_resp, 'bbox_norm')
+            and pose_resp.bbox_norm is not None
+            and len(pose_resp.bbox_norm) == 4
         )
-        ctx.node.get_logger().warn(f"[PICK] {msg}")
-        return False, msg, confidence, PoseStamped()
 
+        if has_bbox:
+            bbox_norm = tuple(pose_resp.bbox_norm)
+            cam_pose, grasp_angle_rad = compute_grasp_from_bbox(
+                bbox_norm,
+                pose_resp.pose,
+                ctx.node.get_logger()
+            )
+            ctx.node.get_logger().info(f"[PICK] Heuristic mode for '{object_name}'")
+        else:
+            # bbox 없으면 각도 0으로
+            cam_pose = pose_resp.pose
+            grasp_angle_rad = 0.0
+            ctx.node.get_logger().warn(f"[PICK] No bbox for '{object_name}', using default angle")
+
+    # ------------------------------------------------------------------
+    # 공통: 좌표 변환 및 실행
+    # ------------------------------------------------------------------
+
+    # 1. TCP 위치 계산 (그리퍼 오프셋 적용)
+    tcp_cam_pose = PoseStamped()
+    tcp_cam_pose.header = cam_pose.header
+    tcp_cam_pose.pose.position.x = cam_pose.pose.position.x
+    tcp_cam_pose.pose.position.y = cam_pose.pose.position.y
+    tcp_cam_pose.pose.position.z = cam_pose.pose.position.z - GRIPPER_OFFSET
+    tcp_cam_pose.pose.orientation = cam_pose.pose.orientation
+
+    if tcp_cam_pose.pose.position.z <= 0.05:
+        return False, "Calculated Z is too close/negative", confidence, PoseStamped()
+
+    # 2. Camera -> Base 좌표 변환
     base_xyz = ctx.transform_camera_to_base(tcp_cam_pose)
     bx, by, bz = base_xyz
 
-    ctx.node.get_logger().info(
-        f"[PICK DEBUG] target='{object_name}', "
-        f"cam_obj=({cam_pose.pose.position.x:.3f},"
-        f"{cam_pose.pose.position.y:.3f},"
-        f"{cam_pose.pose.position.z:.3f}), "
-        f"tcp_cam=({tcp_cam_pose.pose.position.x:.3f},"
-        f"{tcp_cam_pose.pose.position.y:.3f},"
-        f"{tcp_cam_pose.pose.position.z:.3f}), "
-        f"base_tcp=({bx:.3f},{by:.3f},{bz:.3f}), "
-        f"conf={confidence:.2f}"
-    )
-
-    # 3) 실제 모션 수행
+    # 3. 모션 실행
     try:
-        execute_pick_motion(ctx, bx, by, bz)
-        success = True
-        message = "OK"
+        execute_pick_motion(ctx, bx, by, bz, target_yaw_rad=grasp_angle_rad)
+        return True, "Success", confidence, ctx.make_final_pose(bx, by, bz)
     except Exception as e:
-        success = False
-        message = f"pick motion error: {e}"
-        ctx.node.get_logger().error(f"❌ pick motion 중 예외: {e}")
-
-    # 4) final_pose 구성
-    final_pose = ctx.make_final_pose(bx, by, bz)
-    return success, message, confidence, final_pose
+        ctx.node.get_logger().error(f"[PICK] Motion Error: {e}")
+        return False, f"Motion Error: {e}", confidence, PoseStamped()
