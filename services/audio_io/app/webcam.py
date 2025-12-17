@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import cv2
 
-DEFAULT_INDEX = int(os.getenv("DUM_E_WEBCAM_INDEX", "0"))
+DEFAULT_INDEX = int(os.getenv("DUM_E_WEBCAM_INDEX", "8"))
 DEFAULT_WIDTH = int(os.getenv("DUM_E_WEBCAM_WIDTH", "640"))
 DEFAULT_HEIGHT = int(os.getenv("DUM_E_WEBCAM_HEIGHT", "480"))
 
