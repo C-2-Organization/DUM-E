@@ -33,15 +33,40 @@ class MicController:
         self.audio = pyaudio.PyAudio()
         self.sample_width = self.audio.get_sample_size(self.config.fmt)
 
+        # --- 장치 정보 조회 (입력 채널 수 확인) ---
+        device_index = self.config.device_index
+        if device_index is None:
+            try:
+                default = self.audio.get_default_input_device_info()
+                device_index = int(default["index"])
+                self.config.device_index = device_index
+                print(f"[Mic] Using default input device index: {device_index} ({default.get('name')})")
+            except Exception as e:
+                raise RuntimeError(f"[Mic] No default input device available: {e}")
+
+        info = self.audio.get_device_info_by_index(device_index)
+        max_in = int(info.get("maxInputChannels", 0))
+        if max_in <= 0:
+            raise RuntimeError(
+                f"[Mic] Selected device has no input channels. "
+                f"index={device_index}, name={info.get('name')}, maxInputChannels={max_in}"
+            )
+
+        # config.channels가 장치가 지원하는 값보다 크면 줄여서 오픈
+        channels = int(self.config.channels)
+        if channels > max_in:
+            print(f"[Mic] ⚠ requested channels={channels} > device maxInputChannels={max_in}. Using {max_in}.")
+            channels = max_in
+            self.config.channels = channels  # 이후 WAV 저장 nchannels도 맞추기
+
         stream_kwargs = dict(
             format=self.config.fmt,
-            channels=self.config.channels,
+            channels=channels,
             rate=self.config.rate,
             input=True,
             frames_per_buffer=self.config.chunk,
+            input_device_index=device_index,
         )
-        if self.config.device_index is not None:
-            stream_kwargs["input_device_index"] = self.config.device_index
 
         self.stream = self.audio.open(**stream_kwargs)
 
