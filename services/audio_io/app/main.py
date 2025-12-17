@@ -51,6 +51,7 @@ jarvis = JarvisAssistant(tts=tts)
 
 wake_thread: threading.Thread | None = None
 _last_wakeup_flag = False
+_busy_lock = threading.Lock()
 _busy = False
 
 _robot_proc: subprocess.Popen | None = None
@@ -127,6 +128,7 @@ COMPLETE_RESPONSES = [
 
 ctx_mem = ContextMemory(maxlen=5)
 
+_pending_lock = threading.Lock()
 _pending_clarify: dict | None = None
 
 def _is_robot_already_running() -> bool:
@@ -177,7 +179,8 @@ def _request_skill_stop():
     print("[AudioIO] 🛑 STOP 요청을 ROS로 전송합니다.")
 
     global _pending_clarify
-    _pending_clarify = None
+    with _pending_lock:
+        _pending_clarify = None
 
     try:
         cmd = [
@@ -380,21 +383,22 @@ def _run_single_command_flow(
     if transcribe_fn is None:
         transcribe_fn = stt.transcribe_once
 
-    if _busy:
-        print("[AudioIO] ⚠ 이미 명령 처리 중입니다. (일반 명령은 거부, STOP은 허용)")
-        try:
-            if transcribe_fn is None:
-                _listen_one_utterance_even_if_busy(preface_msg)
-                return
-            else:
-                user_text = transcribe_fn()
-                if _handle_text_high_priority(user_text):
+    with _busy_lock:
+        if _busy:
+            print("[AudioIO] ⚠ 이미 명령 처리 중입니다. (일반 명령은 거부, STOP은 허용)")
+            try:
+                if transcribe_fn is None:
+                    _listen_one_utterance_even_if_busy(preface_msg)
                     return
-        except Exception as e:
-            print(f"[AudioIO] ❌ busy 상태 처리 중 에러: {e}")
-        return
+                else:
+                    user_text = transcribe_fn()
+                    if _handle_text_high_priority(user_text):
+                        return
+            except Exception as e:
+                print(f"[AudioIO] ❌ busy 상태 처리 중 에러: {e}")
+            return
 
-    _busy = True
+        _busy = True
     try:
         if preface_msg:
             try:
@@ -425,15 +429,24 @@ def _run_single_command_flow(
 
         global _pending_clarify
 
-        if _pending_clarify is not None:
-            age = time.time() - float(_pending_clarify.get("timestamp", 0))
-            if age > 60.0:   # 60초 예시
-                _pending_clarify = None
-            # 사용자의 이번 발화는 "이전 질문에 대한 답"으로 취급
+        # ✅ 레이스 방지: 스냅샷 떠서 그걸로만 사용
+        with _pending_lock:
+            pending = _pending_clarify
+
+        if pending is not None:
+            age = time.time() - float(pending.get("timestamp", 0))
+            if age > 60.0:
+                with _pending_lock:
+                    # 내가 읽었던 pending이 아직 현재값이면 지움(안전)
+                    if _pending_clarify is pending:
+                        _pending_clarify = None
+                pending = None
+
+        if pending is not None:
             user_text = (
                 "FOLLOW-UP ANSWER TO YOUR LAST CLARIFICATION.\n"
-                f"Previous command: {_pending_clarify.get('original_user_text','')}\n"
-                f"You asked: {_pending_clarify.get('question','')}\n"
+                f"Previous command: {pending.get('original_user_text','')}\n"
+                f"You asked: {pending.get('question','')}\n"
                 f"User answer: {user_text}\n"
                 "Now infer the full intended robot command and produce the final plan.\n"
             )
@@ -458,7 +471,8 @@ def _run_single_command_flow(
 
             # 1) chat이면 대화 답변
             if intent == "chat":
-                _pending_clarify = None
+                with _pending_lock:
+                    _pending_clarify = None
                 reply = (plan.get("chat_reply") or "").strip() or "Understood, sir."
                 tts.speak(reply)
                 return
@@ -467,16 +481,17 @@ def _run_single_command_flow(
             mode = (plan.get("command_mode") or "").lower().strip()
             if intent == "command" and mode == "clarify":
                 clar = plan.get("clarification") or {}
-                _pending_clarify = {
-                    "question": (clar.get("question") or "").strip(),
-                    "expected_answer_type": clar.get("expected_answer_type"),
-                    "choices": clar.get("choices"),
-                    "original_user_text": raw_user_text,          # 지금 턴의 원래 명령
-                    "scene_summary": (plan.get("scene") or {}).get("summary", ""),
-                    "timestamp": time.time(),
-                }
+                with _pending_lock:
+                    _pending_clarify = {
+                        "question": (clar.get("question") or "").strip(),
+                        "expected_answer_type": clar.get("expected_answer_type"),
+                        "choices": clar.get("choices"),
+                        "original_user_text": raw_user_text,          # 지금 턴의 원래 명령
+                        "scene_summary": (plan.get("scene") or {}).get("summary", ""),
+                        "timestamp": time.time(),
+                    }
 
-                q = _pending_clarify["question"] or "Could you clarify, sir?"
+                    q = _pending_clarify["question"] or "Could you clarify, sir?"
                 tts.speak(q)
                 return
         except Exception as e:
@@ -531,7 +546,8 @@ def _run_single_command_flow(
                 time.sleep(0.5)
 
     finally:
-        _busy = False
+        with _busy_lock:
+            _busy = False
 
 def _handle_text_high_priority(user_text: str) -> bool:
     """
@@ -563,7 +579,8 @@ def _handle_text_high_priority(user_text: str) -> bool:
 
         # 1) chat이면 대화 답변
         if intent == "chat":
-            _pending_clarify = None
+            with _pending_lock:
+                _pending_clarify = None
             reply = (plan.get("chat_reply") or "").strip() or "Understood, sir."
             tts.speak(reply)
             return
@@ -571,7 +588,8 @@ def _handle_text_high_priority(user_text: str) -> bool:
         # 2) command인데 clarify면 질문만 하고 종료
         mode = (plan.get("command_mode") or "").lower().strip()
         if intent == "command" and mode == "plan":
-            _pending_clarify = None
+            with _pending_lock:
+                _pending_clarify = None
         if intent == "command" and mode == "clarify":
             q = ((plan.get("clarification") or {}).get("question") or "").strip()
             if not q:
