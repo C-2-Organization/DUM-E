@@ -27,7 +27,7 @@ from dum_e_motion.skills.home import execute_home_motion
 # ---------------------------------------------------------
 # 설정값
 # ---------------------------------------------------------
-TARGET_DISTANCE = 100.0   # 물체와 유지할 거리 100mm
+TARGET_DISTANCE = 500.0   # 물체와 유지할 거리 100mm
 GAIN = 0.5               # 반응 속도 (너무 빠르면 진동 발생)
 MAX_STEP = 100.0         # 한 번에 이동할 최대 거리 100mm (안전장치)
 DEADZONE = 20.0          # 오차 허용 범위 20mm (이 안에서는 안 움직임)
@@ -179,7 +179,7 @@ def run_tracking_skill(cmd: SkillCommand, ctx: MotionContext):
     # [수정] 반복문 종료 후(또는 취소 시) 무조건 홈 복귀
     # ---------------------------------------------------------
     ctx.node.get_logger().info("[TRACKING] Loop finished. Executing Home Motion.")
-    
+
     execute_home_motion(ctx)
 
     return True, "Tracking finished", 1.0, PoseStamped()

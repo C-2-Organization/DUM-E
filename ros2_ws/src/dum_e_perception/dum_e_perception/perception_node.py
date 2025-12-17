@@ -10,6 +10,17 @@ from dum_e_interfaces.srv import GetObjectPose
 from .pose_estimator import PoseEstimator
 from dum_e_utils.realsense import ImgNode
 
+def _create_csrt_tracker():
+    # Some builds expose CSRT here
+    if hasattr(cv2, "TrackerCSRT_create"):
+        return cv2.TrackerCSRT_create()
+
+    # Newer OpenCV often moves trackers under cv2.legacy
+    if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerCSRT_create"):
+        return cv2.legacy.TrackerCSRT_create()
+
+    return None
+
 # =========================================================
 # 내장된 RemoteDetector
 # =========================================================
@@ -19,7 +30,7 @@ class RemoteDetector:
 
     def detect(self, image, text_prompt, top_k=5, box_threshold=0.35, text_threshold=0.25):
         _, img_encoded = cv2.imencode(".jpg", image)
-        
+
         # [수정 1] 키 이름 "image"로 통일
         files = {
             "image": ("image.jpg", img_encoded.tobytes(), "image/jpeg")
@@ -118,10 +129,10 @@ class TrackingNode(Node):
 
         for d in detections:
             if not isinstance(d, dict): continue
-            
+
             # 키 이름 처리 (confidence vs score / bbox vs bbox_xyxy)
             conf = float(d.get("score", d.get("confidence", 0.0)))
-            
+
             # 박스 키 찾기
             raw_box = d.get("bbox_xyxy")
             if raw_box is None: raw_box = d.get("bbox")
@@ -146,31 +157,46 @@ class TrackingNode(Node):
     def _init_tracker(self, color_bgr, bbox_norm):
         """OpenCV Tracker 초기화"""
         h, w = color_bgr.shape[:2]
-        
+
         # 정규 좌표(0~1)를 픽셀 좌표로 변환
         x_min = int(bbox_norm[0] * w)
         y_min = int(bbox_norm[1] * h)
         x_max = int(bbox_norm[2] * w)
         y_max = int(bbox_norm[3] * h)
-        
+
         # 안전장치: 이미지 범위 벗어나지 않게
         x_min = max(0, x_min)
         y_min = max(0, y_min)
         x_max = min(w, x_max)
         y_max = min(h, y_max)
-        
+
         # bbox format: (x, y, w, h)
         bw = x_max - x_min
         bh = y_max - y_min
-        
+
         if bw <= 0 or bh <= 0:
             self.get_logger().warn(f"Invalid tracker bbox: {bw}x{bh}")
             return
 
         bbox_cv = (x_min, y_min, bw, bh)
 
-        self.tracker = cv2.TrackerCSRT_create() 
-        self.tracker.init(color_bgr, bbox_cv)
+        tracker = _create_csrt_tracker()
+        if tracker is None:
+            self.get_logger().warn(
+                "CSRT tracker is not available in this OpenCV build. "
+                "Disable tracking (fallback to detection-only)."
+            )
+            self.tracker = None
+            self.tracker_initialized = False
+            return
+        self.tracker = tracker
+        ok = self.tracker.init(color_bgr, bbox_cv)
+        if ok is False:
+            self.get_logger().warn("Tracker init returned False. Disable tracking.")
+            self.tracker = None
+            self.tracker_initialized = False
+            return
+
         self.tracker_initialized = True
         self.get_logger().info(f"Tracker Initialized (CSRT): {bbox_cv}")
 
@@ -186,7 +212,7 @@ class TrackingNode(Node):
         # cv bbox (x, y, w, h) -> norm bbox (x1, y1, x2, y2)
         h, w = color_bgr.shape[:2]
         x, y, bw, bh = bbox_cv
-        
+
         # 경계 체크
         x1 = max(0, x)
         y1 = max(0, y)
@@ -224,7 +250,7 @@ class TrackingNode(Node):
             if success:
                 bbox_norm = trk_bbox
                 source = "tracker_csrt"
-                confidence = 1.0 
+                confidence = 1.0
             else:
                 self.get_logger().warn("Tracker lost object. Fallback to detection.")
                 self.tracker_initialized = False
@@ -239,10 +265,13 @@ class TrackingNode(Node):
                 bbox_norm = best['bbox_norm']
                 confidence = float(best.get("score", best.get("confidence", 0.0)))
                 source = "remote_gdino"
-                
+
                 # Tracking을 위해 찾은 박스로 Tracker 초기화
                 self._init_tracker(color, bbox_norm)
-                self.tracking_object_name = object_name
+                if self.tracker_initialized:
+                    self.tracking_object_name = object_name
+                else:
+                    self.tracking_object_name = None
             else:
                 self.tracker_initialized = False
                 response.success = False
