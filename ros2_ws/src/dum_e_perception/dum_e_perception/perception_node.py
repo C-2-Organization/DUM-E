@@ -166,6 +166,8 @@ class PerceptionNode(Node):
         response.message = f"ok ({best.get('source', 'detector')})"
         response.pose = pose_msg
         response.confidence = float(best.get("confidence", 0.0))
+        response.bbox_norm = [float(v) for v in bbox_norm]
+        response.detector_source = str(best.get("source", self.detector_mode))
         return response
 
 def test(args=None):
