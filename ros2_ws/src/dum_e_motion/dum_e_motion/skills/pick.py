@@ -145,7 +145,7 @@ def run_pick_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str, fl
     # CASE B: Perception + Heuristic 기반 (기본 모드)
     # ------------------------------------------------------------------
     else:
-        pose_resp = ctx.request_object_pose(object_name)
+        pose_resp = ctx.request_object_pose(object_name, use_tracking=False)
         if not pose_resp or not pose_resp.success:
             return False, f"Perception failed for '{object_name}'", 0.0, PoseStamped()
 

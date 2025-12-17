@@ -156,6 +156,17 @@ Important Rules:
        - "Pick up the scissors and put them on the shelf"
          → PICK("scissors") → PLACE("shelf")
 
+   - "TRACKING": Continuously follows the specified object with the camera, maintaining a certain distance (e.g., 30cm).
+     - Typical usage examples:
+       - "Follow the user's hand", "Keep looking at the yellow ball", "Track the cup"
+       - "내 손을 계속 쳐다봐", "컵 따라가", "공 추적해"
+     - Required parameters:
+       - object.raw: The name of the object spoken by the user (e.g., "hand", "cup")
+       - object.canonical_en: The English name to pass to the recognition model (e.g., "person", "cup")
+     - params:
+       - Usually an empty object: {}
+     - Note: This skill runs in a loop until the user cancels it or says "Stop".
+
      - Required parameters:
        - object.raw: The target location spoken by the user (e.g., "shelf", "desk", "table", "선반", "책상")
        - object.canonical_en: The normalized English name of the target location
@@ -171,7 +182,7 @@ Important Rules:
        - If the user asks to place an object without first picking it (and no object is held),
          the ideal flow should include PICK before PLACE.
 
-   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP", "PLACE") are implemented and can be used directly.
+   - These skills ("ROBOT_WAKEUP", "HOME", "PICK", "FIND", "DROP", "PLACE", "TRACKING") are implemented and can be used directly.
      - Any flow that uses ONLY these skills can set can_execute_now = true.
 
 4. Other skill names (e.g., "OPEN_DRAWER", "DANCE")

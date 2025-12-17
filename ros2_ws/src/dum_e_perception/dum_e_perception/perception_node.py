@@ -1,21 +1,61 @@
-# dum_e_perception/perception_node.py
-import os
+# dum_e_perception/tracking_node.py
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge
 import cv2
-import numpy as np
+import requests
 
 from dum_e_interfaces.srv import GetObjectPose
-from .remote_detector import RemoteVisionDetector
 from .pose_estimator import PoseEstimator
 from dum_e_utils.realsense import ImgNode
 
+# =========================================================
+# 내장된 RemoteDetector
+# =========================================================
+class RemoteDetector:
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
 
-class PerceptionNode(Node):
+    def detect(self, image, text_prompt, top_k=5, box_threshold=0.35, text_threshold=0.25):
+        _, img_encoded = cv2.imencode(".jpg", image)
+        
+        # [수정 1] 키 이름 "image"로 통일
+        files = {
+            "image": ("image.jpg", img_encoded.tobytes(), "image/jpeg")
+        }
+        data = {
+            "text_prompt": text_prompt,
+            "box_threshold": box_threshold,
+            "text_threshold": text_threshold
+        }
+
+        try:
+            response = requests.post(self.endpoint, files=files, data=data, timeout=3.0)
+            if response.status_code == 200:
+                json_resp = response.json()
+                # [수정 2] 리스트/딕셔너리 구조 안전 처리
+                if isinstance(json_resp, list):
+                    return json_resp
+                elif isinstance(json_resp, dict):
+                    if "results" in json_resp: return json_resp["results"]
+                    if "detections" in json_resp: return json_resp["detections"]
+                    # 단일 객체 감지 대응
+                    if "bbox_xyxy" in json_resp or "box" in json_resp:
+                        return [json_resp]
+                    return []
+                else:
+                    return []
+            else:
+                print(f"[Remote] Error {response.status_code}: {response.text}")
+                return []
+        except Exception as e:
+            print(f"[Remote] Request failed: {e}")
+            return []
+
+class TrackingNode(Node):
     def __init__(self):
-        super().__init__('dum_e_perception')
+        super().__init__('dum_e_tracking')
 
         # ----------------------------
         # Params
@@ -30,35 +70,24 @@ class PerceptionNode(Node):
         self.remote_box_threshold = float(self.get_parameter("remote_box_threshold").value)
         self.remote_text_threshold = float(self.get_parameter("remote_text_threshold").value)
 
-        self.get_logger().info(f"[Perception] Endpoint={self.remote_endpoint}")
-        self.get_logger().info(f"[Perception] Mode=Center Point Tracking (Lucas-Kanade)")
+        self.get_logger().info(f"[Tracking] Initialized. Remote: {self.remote_endpoint}")
 
         # ----------------------------
-        # Remote detector init
+        # Modules Init
         # ----------------------------
-        self.detector_remote = RemoteVisionDetector(self.remote_endpoint)
-
-        # ----------------------------
-        # Point Tracking State (Optical Flow)
-        # ----------------------------
-        self.prev_gray = None       # 이전 프레임 (Gray)
-        self.track_point = None     # 추적 중인 중심점 좌표 (numpy array)
-        self.track_wh = None        # 추적 중인 물체의 크기 (w, h) - Depth 계산용
-        self.tracking_object_name = None
-
-        # Lucas-Kanade 파라미터
-        self.lk_params = dict(
-            winSize=(21, 21),
-            maxLevel=3,
-            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
-        )
-
-        # RealSense init
+        self.detector_remote = RemoteDetector(self.remote_endpoint)
         self.camera = ImgNode(self)
-        self.estimator = None
+        self.estimator = None # Intrinsic 대기
         self.bridge = CvBridge()
 
-        # Service
+        # ----------------------------
+        # Tracker State
+        # ----------------------------
+        self.tracker = None
+        self.tracking_object_name = None
+        self.tracker_initialized = False
+
+        # Service Server
         self.srv = self.create_service(GetObjectPose, 'get_object_pose', self.handle_get_object_pose)
 
     def _ensure_estimator(self):
@@ -71,43 +100,105 @@ class PerceptionNode(Node):
         self.get_logger().info(f"PoseEstimator initialized: {intr}")
         return True
 
-    def _norm_to_xywh(self, bbox_norm, w, h):
-        """Normalized [x1, y1, x2, y2] -> Pixel [x, y, w, h]"""
-        x1, y1, x2, y2 = bbox_norm
-        x = max(0, min(int(x1 * w), w - 1))
-        y = max(0, min(int(y1 * h), h - 1))
-        ww = max(1, min(int((x2 - x1) * w), w - x))
-        hh = max(1, min(int((y2 - y1) * h), h - y))
-        return x, y, ww, hh
-
-    def _xywh_to_norm(self, bbox_xywh, w, h):
-        """Pixel [x, y, w, h] -> Normalized [x1, y1, x2, y2]"""
-        x, y, ww, hh = bbox_xywh
-        x1 = x / w
-        y1 = y / h
-        x2 = (x + ww) / w
-        y2 = (y + hh) / h
-        return [x1, y1, x2, y2]
-
-    def _detect_remote_best(self, color_bgr, object_name: str):
-        try:
-            detections = self.detector_remote.detect(
-                color_bgr,
-                text_prompt=object_name,
-                top_k=self.remote_top_k,
-                box_threshold=self.remote_box_threshold,
-                text_threshold=self.remote_text_threshold,
-            )
-            if not detections:
-                return None
-            return max(detections, key=lambda d: d["confidence"])
-        except Exception as e:
-            self.get_logger().error(f"Remote detection error: {e}")
+    def _detect_remote(self, color_bgr, object_name: str):
+        """느리지만 정확한 Deep Learning 감지 + 좌표 정규화"""
+        detections = self.detector_remote.detect(
+            color_bgr,
+            text_prompt=object_name,
+            top_k=self.remote_top_k,
+            box_threshold=self.remote_box_threshold,
+            text_threshold=self.remote_text_threshold,
+        )
+        if not detections:
             return None
 
+        best = None
+        best_score = -1.0
+        h, w = color_bgr.shape[:2]
+
+        for d in detections:
+            if not isinstance(d, dict): continue
+            
+            # 키 이름 처리 (confidence vs score / bbox vs bbox_xyxy)
+            conf = float(d.get("score", d.get("confidence", 0.0)))
+            
+            # 박스 키 찾기
+            raw_box = d.get("bbox_xyxy")
+            if raw_box is None: raw_box = d.get("bbox")
+            if raw_box is None: raw_box = d.get("box")
+
+            if raw_box and conf > best_score:
+                best_score = conf
+                best = d
+                # 찾은 박스를 정규화된 bbox(0~1)로 변환하여 저장
+                # 서버가 픽셀(>1.0)을 주면 정규화하고, 정규화된 값을 주면 그대로 씀
+                is_pixel = any(v > 1.0 for v in raw_box)
+                if is_pixel:
+                     best['bbox_norm'] = [
+                         raw_box[0] / w, raw_box[1] / h,
+                         raw_box[2] / w, raw_box[3] / h
+                     ]
+                else:
+                    best['bbox_norm'] = raw_box
+
+        return best
+
+    def _init_tracker(self, color_bgr, bbox_norm):
+        """OpenCV Tracker 초기화"""
+        h, w = color_bgr.shape[:2]
+        
+        # 정규 좌표(0~1)를 픽셀 좌표로 변환
+        x_min = int(bbox_norm[0] * w)
+        y_min = int(bbox_norm[1] * h)
+        x_max = int(bbox_norm[2] * w)
+        y_max = int(bbox_norm[3] * h)
+        
+        # 안전장치: 이미지 범위 벗어나지 않게
+        x_min = max(0, x_min)
+        y_min = max(0, y_min)
+        x_max = min(w, x_max)
+        y_max = min(h, y_max)
+        
+        # bbox format: (x, y, w, h)
+        bw = x_max - x_min
+        bh = y_max - y_min
+        
+        if bw <= 0 or bh <= 0:
+            self.get_logger().warn(f"Invalid tracker bbox: {bw}x{bh}")
+            return
+
+        bbox_cv = (x_min, y_min, bw, bh)
+
+        self.tracker = cv2.TrackerCSRT_create() 
+        self.tracker.init(color_bgr, bbox_cv)
+        self.tracker_initialized = True
+        self.get_logger().info(f"Tracker Initialized (CSRT): {bbox_cv}")
+
+    def _update_tracker(self, color_bgr):
+        """Tracker 업데이트"""
+        if self.tracker is None or not self.tracker_initialized:
+            return False, None
+
+        success, bbox_cv = self.tracker.update(color_bgr)
+        if not success:
+            return False, None
+
+        # cv bbox (x, y, w, h) -> norm bbox (x1, y1, x2, y2)
+        h, w = color_bgr.shape[:2]
+        x, y, bw, bh = bbox_cv
+        
+        # 경계 체크
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(w, x + bw)
+        y2 = min(h, y + bh)
+
+        bbox_norm = [x1/w, y1/h, x2/w, y2/h]
+        return True, bbox_norm
+
     def handle_get_object_pose(self, request, response):
-        target_name = request.object_name
-        use_tracking = getattr(request, 'use_tracking', True)
+        object_name = request.object_name
+        use_tracking = request.use_tracking
 
         if not self._ensure_estimator():
             response.success = False
@@ -117,94 +208,52 @@ class PerceptionNode(Node):
         color, depth = self.camera.get_frame()
         if color is None or depth is None:
             response.success = False
-            response.message = "Frames not ready"
+            response.message = "Camera frames not ready"
             return response
-
-        h_img, w_img = color.shape[:2]
-        gray_frame = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
 
         bbox_norm = None
-        source_method = "NONE"
+        source = "none"
         confidence = 0.0
 
-        # ---------------------------------------------------------
-        # 1. Point Tracking 시도 (Optical Flow)
-        # ---------------------------------------------------------
-        # 조건: 이전 포인트 존재, 이전 프레임 존재, 타겟 이름 일치, 트래킹 요청
-        if (self.track_point is not None and
-            self.prev_gray is not None and
-            self.tracking_object_name == target_name and
-            use_tracking):
-
-            # Lucas-Kanade Optical Flow 계산
-            p1, st, err = cv2.calcOpticalFlowPyrLK(
-                self.prev_gray, gray_frame, self.track_point, None, **self.lk_params
-            )
-
-            # st[0] == 1 이면 추적 성공
-            if st[0] == 1:
-                # 새 좌표 업데이트
-                new_cx, new_cy = p1[0].ravel()
-
-                # 경계 밖으로 나갔는지 체크
-                if 0 <= new_cx < w_img and 0 <= new_cy < h_img:
-                    self.track_point = p1 # 상태 업데이트
-
-                    # 3D Depth 계산을 위해 BBox 복원 (중심점은 이동, 크기는 고정 가정)
-                    saved_w, saved_h = self.track_wh
-                    t_x = int(new_cx - saved_w / 2)
-                    t_y = int(new_cy - saved_h / 2)
-
-                    # Normalized BBox 생성
-                    bbox_norm = self._xywh_to_norm((t_x, t_y, saved_w, saved_h), w_img, h_img)
-                    source_method = "TRACK_POINT"
-                    confidence = 1.0
-                else:
-                    self.track_point = None # 화면 밖으로 나감
+        # ----------------------------------------------------
+        # 1. Tracking Mode (OpenCV)
+        # ----------------------------------------------------
+        # 요청이 '추적 모드'이고, 이전에 같은 물체를 추적 중이었다면
+        if use_tracking and self.tracker_initialized and self.tracking_object_name == object_name:
+            success, trk_bbox = self._update_tracker(color)
+            if success:
+                bbox_norm = trk_bbox
+                source = "tracker_csrt"
+                confidence = 1.0 
             else:
-                self.track_point = None # 추적 실패 (가려짐 등)
+                self.get_logger().warn("Tracker lost object. Fallback to detection.")
+                self.tracker_initialized = False
 
-        # ---------------------------------------------------------
-        # 2. Tracking 실패 또는 초기 진입 -> Remote Detection
-        # ---------------------------------------------------------
+        # ----------------------------------------------------
+        # 2. Detection Mode (Remote) - 초기화 또는 실패 시
+        # ----------------------------------------------------
         if bbox_norm is None:
-            # 트래킹 상태 리셋
-            self.track_point = None
+            best = self._detect_remote(color, object_name)
+            if best and 'bbox_norm' in best:
+                # 위 _detect_remote에서 정규화해둔 bbox_norm 사용
+                bbox_norm = best['bbox_norm']
+                confidence = float(best.get("score", best.get("confidence", 0.0)))
+                source = "remote_gdino"
+                
+                # Tracking을 위해 찾은 박스로 Tracker 초기화
+                self._init_tracker(color, bbox_norm)
+                self.tracking_object_name = object_name
+            else:
+                self.tracker_initialized = False
+                response.success = False
+                response.message = f"Object '{object_name}' not found"
+                return response
 
-            best_det = self._detect_remote_best(color, target_name)
-
-            if best_det is not None:
-                bbox_norm = best_det.get("bbox")
-                confidence = float(best_det.get("confidence", 0.0))
-                source_method = "REMOTE_GDINO"
-
-                # Point Tracking 초기화
-                if bbox_norm is not None:
-                    # Normalized -> Pixel
-                    px, py, pw, ph = self._norm_to_xywh(bbox_norm, w_img, h_img)
-
-                    # 중심점 계산
-                    cx = px + pw / 2.0
-                    cy = py + ph / 2.0
-
-                    # 상태 저장
-                    self.track_point = np.array([[cx, cy]], dtype=np.float32)
-                    self.track_wh = (pw, ph)
-                    self.tracking_object_name = target_name
-                    self.get_logger().info(f"Point Tracking Init: '{target_name}' at ({cx:.1f}, {cy:.1f})")
-
-        # 현재 프레임을 '이전 프레임'으로 저장 (다음 루프용)
-        self.prev_gray = gray_frame.copy()
-
-        # ---------------------------------------------------------
-        # 3. 3D Pose Estimation
-        # ---------------------------------------------------------
-        if bbox_norm is None:
-            response.success = False
-            response.message = f"Object '{target_name}' not found"
-            return response
-
-        pose = self.estimator.bbox_to_3d_heuristic(
+        # ----------------------------------------------------
+        # 3. 3D Pose Calculation
+        # ----------------------------------------------------
+        # bbox_norm은 이제 항상 0~1 사이의 값임을 보장함
+        pose_3d = self.estimator.bbox_to_3d_heuristic(
             bbox_norm,
             depth,
             roi_expand=0.08,
@@ -213,12 +262,12 @@ class PerceptionNode(Node):
             median_band=30,
         )
 
-        if pose is None:
+        if pose_3d is None:
             response.success = False
-            response.message = "Invalid depth (z=0)"
+            response.message = "Invalid depth (z=0 or out of range)"
             return response
 
-        x, y, z = pose
+        x, y, z = pose_3d
         pose_msg = PoseStamped()
         pose_msg.header.frame_id = "camera_link"
         pose_msg.header.stamp = self.get_clock().now().to_msg()
@@ -226,8 +275,9 @@ class PerceptionNode(Node):
         pose_msg.pose.position.y = y
         pose_msg.pose.position.z = z
 
+        # response 채우기
         response.success = True
-        response.message = f"ok ({source_method})"
+        response.message = f"ok ({source})"
         response.pose = pose_msg
         response.confidence = confidence
         response.bbox_norm = [float(v) for v in bbox_norm]
@@ -236,8 +286,9 @@ class PerceptionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = PerceptionNode()
-    node.get_logger().info("=== dum_e_perception (Point Tracking) Started ===")
+    node = TrackingNode()
+    node.get_logger().info("=== dum_e_tracking node started ===")
+    node.get_logger().info("Service: /get_object_pose")
 
     try:
         rclpy.spin(node)

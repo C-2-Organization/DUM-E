@@ -306,6 +306,9 @@ def _execute_plan(plan: dict) -> bool:
                 print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
                 return False
 
+            executed_any = True
+            continue
+
         elif skill == "DROP":
             try:
                 resp = call_run_skill(
@@ -318,6 +321,9 @@ def _execute_plan(plan: dict) -> bool:
             except Exception as e:
                 print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
                 return False
+
+            executed_any = True
+            continue
 
         elif skill == "PLACE":
             obj = step.get("object") or {}
@@ -351,6 +357,30 @@ def _execute_plan(plan: dict) -> bool:
             executed_any = True
             continue
 
+        elif skill == "TRACKING":
+            obj = step.get("object") or {}
+            obj_name = obj.get("canonical_en") or obj.get("raw") or ""
+
+            if not obj_name:
+                print("[AudioIO] ⚠ TRACKING 스텝에 object_name 이 없음:", step)
+                continue
+
+            print(f"[AudioIO] 👁 추적 시작: TRACKING '{obj_name}'")
+
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.TRACKING,
+                    object_name=obj_name,
+                    target_pose=None,
+                    params_json=json.dumps(step.get("params") or {}),
+                    timeout_sec=None,  # tracking은 보통 non-blocking
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ TRACKING 실행 중 에러: {e}")
+                return False
+
+            executed_any = True
+            continue
 
         else:
             print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")

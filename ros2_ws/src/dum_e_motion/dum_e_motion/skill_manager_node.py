@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find, home, drop, place
+from dum_e_motion.skills import pick, find, home, drop, place, tracking
 
 ROBOT_ID = "dsr01"
 
@@ -219,6 +219,16 @@ class SkillManagerNode(Node):
                 response.message = message
                 response.confidence = confidence
                 response.final_pose = final_pose
+                return response
+
+            elif cmd.skill_type == SkillCommand.TRACKING:
+                self.get_logger().info(f"🔔 RunSkill: TRACKING, {cmd.object_name}을 추적합니다.")
+                success, msg, conf, pose = tracking.run_tracking_skill(cmd, self.ctx)
+                
+                response.success = success
+                response.message = msg
+                response.confidence = conf
+                response.final_pose = pose
                 return response
 
             else:
