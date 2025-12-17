@@ -187,30 +187,113 @@ AVAILABLE SKILLS (IMPLEMENTED)
 ────────────────────────────────────────
 
 ROBOT_WAKEUP
-- Purpose: Bring up the robot system when not connected.
-- Does NOT move the robot arm.
-- Use only if the user explicitly or implicitly asks to turn the robot on.
+- Purpose: Boot / bring up the robot system when it is not connected (launch bringup).
+- Moves arm: No.
+- Use when: The user asks to turn on, wake up, or boot the robot (KR/EN).
+- Object:
+  - object.raw = null
+  - object.canonical_en = null
+- Params: {}
+- Examples:
+  - "Wake up the robot"
+  - "Turn on DUM-E"
+  - "로봇 켜"
+  - "더미 깨워줘"
+
 
 HOME
-- Opens the gripper and returns the robot to its default safe pose.
+- Purpose: Return the robot arm to a predefined safe default "home" pose.
+- Moves arm: Yes (fixed predefined pose).
+- Use when: User asks to reset, go home, return to default posture.
+- Object:
+  - object.raw = null
+  - object.canonical_en = null
+- Params: {}
+- Examples:
+  - "Go home"
+  - "Reset your pose"
+  - "기본 자세로 돌아가"
+  - "원위치 해"
+  - "차렷"
 
-PICK
-- Detects and grasps the specified object.
-- If detection fails, the system will automatically attempt FIND internally.
 
 FIND
-- Searches for an object by moving the robot/camera.
-- Requires search_region:
-  - "desk": objects likely on the desk
-  - "outside": objects off the desk (person, chair, bag, etc.)
-- Choose search_region based on scene inference.
+- Purpose: Search for an object by moving the robot/camera until it is detected.
+- Moves arm: Yes (search / scan).
+- Does NOT pick up the object.
+- Required object:
+  - object.raw: user-spoken object name
+  - object.canonical_en: grounded concrete English object name
+- Required params:
+  - search_region: "desk" or "outside"
+    - "desk": desk-surface items (pen, cup, phone, tools, box)
+    - "outside": person, chair, bag, floor area
+- Optional params (only if supported, otherwise omit):
+  - max_search_time (float, seconds)
+  - scan_interval (float, seconds)
+- Examples:
+  - FIND(scissors, {"search_region": "desk"})
+  - FIND(person, {"search_region": "outside"})
+
+
+PICK
+- Purpose: Detect and grasp a specified object.
+- Moves arm: Yes.
+- Required object:
+  - object.raw: user-spoken object name
+  - object.canonical_en: grounded concrete English object name
+- Params: {}
+- Notes:
+  - If detection fails, the system may attempt FIND internally.
+- Examples:
+  - "Grab the scissors"
+  - "가위 집어줘"
+
 
 DROP
-- Opens the gripper at the current position to release the held object.
+- Purpose: Open the gripper in-place to release the currently held object.
+- Moves arm: No.
+- Object:
+  - object.raw = null
+  - object.canonical_en = null
+- Params: {}
+- Examples:
+  - "Drop it"
+  - "Let go"
+  - "놓아"
+  - "그리퍼 열어"
+
 
 PLACE
-- Releases the currently held object onto a specified target location.
-- Assumes the robot is already holding something.
+- Purpose: Place (release) the currently held object onto a specified target.
+- Moves arm: Yes (as needed to place).
+- Required object (target):
+  - object.raw: user-spoken target name (e.g., "phone", "desk", "box", "shelf")
+  - object.canonical_en: grounded English target name
+- Params: {}
+- Preconditions:
+  - The robot is already holding an object.
+- Examples:
+  - "Put it on the phone"
+  - "책상 위에 놔"
+  - "선반에 올려놔"
+
+
+TRACKING
+- Purpose: Continuously track and follow a specified object with the camera.
+- Moves arm: Yes (camera / arm adjusts).
+- Does NOT grasp or place objects.
+- Required object:
+  - object.raw: user-spoken object name (e.g., "my hand", "cup", "phone")
+  - object.canonical_en: grounded concrete English name (e.g., "hand", "cup", "phone", "person")
+- Params: {}
+- Behavior:
+  - Runs continuously until the user says stop/cancel or issues a new command.
+- Examples:
+  - "Track my hand"
+  - "내 손 계속 따라가"
+  - "컵 추적해"
+
 
 ────────────────────────────────────────
 PLANNING RULES

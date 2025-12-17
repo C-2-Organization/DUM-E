@@ -11,4 +11,3 @@ string message
 geometry_msgs/PoseStamped pose
 float32 confidence
 float32[4] bbox_norm
-string detector_source # optional: "remote_gdino" / "local_yolo"
