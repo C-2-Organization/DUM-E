@@ -20,6 +20,46 @@ Jarvis 스타일의 음성 비서 시스템 (Wakeword → STT → LLM → TTS + 
 - **종료 키워드**: "그만", "끝", "됐어", "that's all" 등으로 대화 종료
 - **자동 대기**: 무응답 시 자동으로 대기 모드로 복귀
 
+## 설치
+
+### 1. 필수 패키지 설치
+
+```bash
+# Python 패키지 설치
+pip install -r requirements.txt
+
+# 주요 의존성:
+# - PySide6>=6.5.0           # Qt6 GUI 프레임워크
+# - numpy>=1.24.0            # 수치 연산
+# - scipy>=1.10.0            # 신호 처리 (FFT, 리샘플링)
+# - sounddevice>=0.4.6       # 오디오 I/O
+# - webrtcvad>=2.0.10        # 음성 활동 감지
+# - pvporcupine>=3.0.0       # Wakeword 감지
+# - openai>=1.0.0            # OpenAI API (STT, LLM, TTS)
+# - python-dotenv>=1.0.0     # 환경 변수 관리
+```
+
+### 2. Wakeword 모델 준비
+
+Jarvis wakeword 모델 파일이 필요합니다:
+```
+services/audio_io/app/models/
+├── jarvis.ppn     # Jarvis wakeword 모델
+└── dummy.ppn      # Dummy wakeword 모델 (선택)
+```
+
+Picovoice Console에서 커스텀 wakeword 모델을 생성하거나 기존 모델을 사용하세요.
+
+### 3. GIF 애니메이션 준비
+
+HUD에 사용할 GIF 파일을 준비합니다:
+```bash
+# 기본 경로
+services/audio_io/app/assets/jarvis.gif
+```
+
+원하는 GIF 파일을 이 위치에 복사하면 됩니다.
+
 ## 실행 방법
 
 ### 1. 환경 설정
