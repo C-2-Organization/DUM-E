@@ -372,7 +372,17 @@ def _run_single_command_flow(
         transcribe_fn = stt.transcribe_once
 
     if _busy:
-        print("[AudioIO] ⚠ 이미 명령 처리 중입니다. 이번 호출은 무시합니다.")
+        print("[AudioIO] ⚠ 이미 명령 처리 중입니다. (일반 명령은 거부, STOP은 허용)")
+        try:
+            if transcribe_fn is None:
+                _listen_one_utterance_even_if_busy(preface_msg)
+                return
+            else:
+                user_text = transcribe_fn()
+                if _handle_text_high_priority(user_text):
+                    return
+        except Exception as e:
+            print(f"[AudioIO] ❌ busy 상태 처리 중 에러: {e}")
         return
 
     _busy = True
@@ -441,10 +451,6 @@ def _run_single_command_flow(
                     or "Process execution failed."
                 )
                 print(f"[AudioIO] ⚠ 계획은 가능하다고 했지만 실제 실행 실패: {fallback_msg}")
-                try:
-                    tts.speak("Process execution failed.")
-                except Exception as e:
-                    print(f"[AudioIO] ❌ TTS 에러: {e}")
             else:
                 complete_msg = random.choice(COMPLETE_RESPONSES)
                 print(f"[AudioIO] ✅ Plan execution complete: {complete_msg}")
@@ -453,6 +459,55 @@ def _run_single_command_flow(
 
     finally:
         _busy = False
+
+def _handle_text_high_priority(user_text: str) -> bool:
+    """
+    busy 상태에서도 우선 처리할 것들(STOP 등)을 처리한다.
+    처리했으면 True, 아니면 False.
+    """
+    if not user_text or not user_text.strip():
+        return True  # 빈 입력은 소모 처리
+
+    if _is_stop_command(user_text):
+        print("[AudioIO] 🛑 (HP) STOP 계열 명령 감지")
+        _request_skill_stop()
+        try:
+            tts.speak("Stopping, sir.")
+        except Exception:
+            pass
+        return True
+
+    return False
+
+
+def _listen_one_utterance_even_if_busy(preface: str | None = None):
+    """
+    _busy 상태에서도 '듣기'는 수행한다.
+    - STOP이면 즉시 중단 요청
+    - STOP이 아니면 '지금 작업 중' 안내만 하고 종료
+    """
+    try:
+        if preface:
+            try:
+                tts.speak(preface)
+                time.sleep(0.2)
+            except Exception:
+                pass
+
+        user_text = stt.transcribe_once()
+        print(f"[AudioIO] (BUSY LISTEN) 🎙 '{user_text}'")
+
+        if _handle_text_high_priority(user_text):
+            return
+
+        # busy 중 일반 명령은 큐잉/취소정책이 필요하니, 일단 안내로 처리
+        try:
+            tts.speak("I'm currently executing a task, sir. Say 'stop' to interrupt or try again shortly.")
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"[AudioIO] ❌ busy listen 중 에러: {e}")
 
 def _on_wake_detected(keyword: str):
     """
@@ -466,6 +521,12 @@ def _on_wake_detected(keyword: str):
     _last_wakeup_flag = True
 
     wake_msg = random.choice(WAKE_RESPONSES)
+
+    if _busy:
+        print("[AudioIO] (WAKE) busy 상태에서도 1회 명령 청취")
+        _listen_one_utterance_even_if_busy(preface=wake_msg)
+        return
+
     _run_single_command_flow(preface_msg=wake_msg)
 
 def _on_space_pressed():
@@ -546,32 +607,22 @@ def on_startup():
     print("[AudioIO] FastAPI startup")
     mic.open_stream()
 
-    if AUDIO_MODE == "wakeword":
-        # 기존 wakeword 모드
-        wake.init_model()
+    mode = AUDIO_MODE
 
+    enable_wake = mode in ("wakeword", "hybrid", "both")
+    enable_ptt  = mode in ("push_to_talk", "hybrid", "both")
+
+    if enable_wake:
+        wake.init_model()
         wake_thread = threading.Thread(
             target=start_wakeword_loop,
             args=(wake, _on_wake_detected, 0.0),
             daemon=True,
         )
         wake_thread.start()
-
-        greeting_msg = random.choice(GREETING_RESPONSES)
-        print(f"[AudioIO] 💬 Greeting (wakeword): {greeting_msg}")
-        tts.speak(greeting_msg)
-        time.sleep(0.5)
         print("[AudioIO] ✅ Wakeword loop started")
 
-    elif AUDIO_MODE == "push_to_talk":
-        # push-to-talk 모드
-        greeting_msg = (
-            "Systems online, sir. Push and hold the space bar to issue a command."
-        )
-        print(f"[AudioIO] 💬 Greeting (push_to_talk): {greeting_msg}")
-        tts.speak(greeting_msg)
-        time.sleep(0.5)
-
+    if enable_ptt:
         pt_thread = threading.Thread(
             target=_start_push_to_talk_loop,
             daemon=True,
@@ -579,23 +630,28 @@ def on_startup():
         pt_thread.start()
         print("[AudioIO] ✅ Push-to-talk loop started (space key)")
 
+    # greeting
+    if enable_wake and enable_ptt:
+        greeting_msg = "Systems online, sir."
+    elif enable_wake:
+        greeting_msg = random.choice(GREETING_RESPONSES)
+    elif enable_ptt:
+        greeting_msg = "Systems online, sir. Push and hold the space bar to issue a command."
     else:
-        # 알 수 없는 모드인 경우 안전하게 wakeword 모드로 폴백
-        print(f"[AudioIO] ⚠ Unknown AUDIO_MODE='{AUDIO_MODE}', falling back to wakeword mode.")
+        # 안전 폴백: wakeword 켜기
         wake.init_model()
-
         wake_thread = threading.Thread(
             target=start_wakeword_loop,
             args=(wake, _on_wake_detected, 0.0),
             daemon=True,
         )
         wake_thread.start()
-
         greeting_msg = random.choice(GREETING_RESPONSES)
-        print(f"[AudioIO] 💬 Greeting (fallback wakeword): {greeting_msg}")
-        tts.speak(greeting_msg)
-        time.sleep(0.5)
-        print("[AudioIO] ✅ Wakeword loop started (fallback)")
+
+    print(f"[AudioIO] 💬 Greeting: {greeting_msg}")
+    tts.speak(greeting_msg)
+    time.sleep(0.5)
+    print("[AudioIO] ✅ Wakeword loop started (fallback)")
 
 
 @app.on_event("shutdown")
