@@ -88,5 +88,7 @@ threadpoolctl==3.6.0
 fsspec==2025.12.0
 tqdm==4.67.1
 
+opencv-contrib-python
+
 # CLIP (ultralytics에서 쓰는 버전 pin 그대로)
 clip @ git+https://github.com/ultralytics/CLIP.git@4f352ca0a7450598833a770314f73e1f74e05f30
