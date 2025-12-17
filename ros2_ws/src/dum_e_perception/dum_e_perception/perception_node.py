@@ -1,5 +1,6 @@
 # dum_e_perception/perception_node.py
 import os
+import cv2
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped

@@ -18,7 +18,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find, home, drop, place
+from dum_e_motion.skills import pick, find, home, drop, place, swip, dump
 
 ROBOT_ID = "dsr01"
 
@@ -219,6 +219,32 @@ class SkillManagerNode(Node):
                 response.message = message
                 response.confidence = confidence
                 response.final_pose = final_pose
+                return response
+
+            elif cmd.skill_type == SkillCommand.SWIP:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: SWIP, 바닥을 닦습니다."
+                )
+
+                success, message, confidence = swip.run_swip_skill(self.ctx)
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = PoseStamped()
+                return response
+
+            elif cmd.skill_type == SkillCommand.DUMP:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: DUMP, 쓰레기를 버립니다."
+                )
+
+                success, message, confidence = dump.run_dump_skill(self.ctx)
+
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = PoseStamped()
                 return response
 
             else:

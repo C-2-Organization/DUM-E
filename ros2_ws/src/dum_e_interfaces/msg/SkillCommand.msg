@@ -5,6 +5,8 @@ uint8 FIND=1
 uint8 HOME=2
 uint8 DROP=3
 uint8 PLACE=4
+uint8 SWIP=5
+uint8 DUMP=6
 
 uint8 skill_type
 string object_name
