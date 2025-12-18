@@ -394,6 +394,34 @@ def _execute_plan(plan: dict) -> bool:
             executed_any = True
             continue
 
+        elif skill == "HANDOVER":
+            obj = step.get("object") or {}
+            obj_name = obj.get("canonical_en") or obj.get("raw") or ""
+            params = step.get("params") or {}
+            params_json = json.dumps(params, ensure_ascii=False)
+
+            print(f"[AudioIO] 🤝 실행: HANDOVER, params={params}")
+
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.HANDOVER,
+                    object_name=obj_name,
+                    target_pose=None,
+                    params_json=params_json,
+                    timeout_sec=60.0,
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ HANDOVER 실행 중 /run_skill 호출 에러: {e}")
+                return False
+
+            print(
+                f"[AudioIO] ✅ HANDOVER 응답: success={resp.success}, "
+                f"confidence={resp.confidence:.2f}, message='{resp.message}'"
+            )
+
+            executed_any = True
+            continue
+
         else:
             print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")
 

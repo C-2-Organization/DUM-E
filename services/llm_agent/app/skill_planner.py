@@ -146,7 +146,18 @@ Definitions:
 
 Hard rules:
 1) NEVER pass abstract descriptors into skill.object.canonical_en.
-2) skill.object.canonical_en MUST be a concrete noun that the detector can search for (e.g., "hammer", "phone", "box", "scissors", "orange").
+2) skill.object.canonical_en MUST be a detector-friendly concrete noun phrase that
+   Grounding DINO can search for.
+
+   - It MUST include a clear head noun:
+     e.g., "hammer", "phone", "box", "scissors", "orange".
+   - It MAY include short attributes that help identification:
+     e.g., "red mug", "small black iphone", "blue plastic water bottle",
+          "asian young man with a green cap".
+   - It MUST NOT be a vague or task-oriented phrase such as:
+     "the heaviest one", "the thing from before", "the object I mentioned".
+   - It SHOULD stay short (ideally 2–6 tokens) and focused on visual properties
+     (category, color, size, clothing, obvious accessories, approximate pose).
 3) skill.object.raw may keep the user's phrase, but canonical_en must be resolved.
 4) If you cannot confidently resolve to ONE object:
    - Use command_mode="clarify"
@@ -158,6 +169,10 @@ Comparative descriptors:
 - For "heaviest", "lightest", "biggest", "smallest", "most expensive-looking", etc.:
   - You MUST pick the single best candidate from scene.objects based on common sense visual priors.
   - If multiple candidates are plausible (confidence < 0.7), you MUST ask clarification with choices.
+
+Handover rules:
+- When user intent involves handing something to the user (HANDOVER),
+  the canonical_en MUST remain the object name, not "handover".
 
 ────────────────────────────────────────
 AMBIGUOUS OBJECTS POLICY
@@ -294,6 +309,32 @@ TRACKING
   - "내 손 계속 따라가"
   - "컵 추적해"
 
+
+HANDOVER
+- Purpose: Hand the object to the user by moving near the user's hand and opening the gripper.
+- Moves arm: Yes.
+- Use when:
+  - The user asks the robot to give / pass / hand something to them (KR/EN).
+  - Examples: "Give me the hammer", "Hand me the cup", "나한테 건네줘", "내 손에 줘".
+
+- Object rules:
+  - object.raw: original user phrase (e.g., "give me the hammer", "나한테 망치 줘").
+  - object.canonical_en: MUST be the grounded object name (e.g., "hammer", "cup", "phone").
+  - canonical_en MUST NOT be "handover".
+
+- Planning rules (logical):
+  - The low-level system will decide whether PICK is needed based on gripper state.
+  - The planner SHOULD NOT assume detailed gripper state.
+  - The planner SHOULD:
+    - Use HANDOVER when the user’s intent is “give/pass/hand me X”.
+    - Ensure canonical_en is the correct object name.
+  - If the user says only "Hand me that" or "나한테 건네줘" with no identifiable object:
+    - command_mode="clarify"
+    - Ask ONE question to identify which object to hand over.
+
+- Params (optional):
+  - wait_sec (float): seconds to pause after reaching the hand before opening the gripper.
+    - If omitted, default is acceptable.
 
 ────────────────────────────────────────
 PLANNING RULES

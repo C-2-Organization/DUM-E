@@ -5,10 +5,12 @@ from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge
 import cv2
 import requests
+import numpy as np
 
 from dum_e_interfaces.srv import GetObjectPose
 from .pose_estimator import PoseEstimator
 from dum_e_utils.realsense import ImgNode
+from .hand_detector import MediaPipeHandDetector
 
 def _create_csrt_tracker():
     # Some builds expose CSRT here
@@ -98,6 +100,40 @@ class TrackingNode(Node):
         self.tracking_object_name = None
         self.tracker_initialized = False
 
+        # ------------------------------------------------
+        # HANDOVER / MediaPipe params & module
+        # ------------------------------------------------
+        self.declare_parameter("handover_min_det_conf", 0.6)
+        self.declare_parameter("handover_min_track_conf", 0.5)
+        self.declare_parameter("handover_z_min_mm", 150.0)
+        self.declare_parameter("handover_z_max_mm", 2000.0)
+        self.declare_parameter("handover_roi_px", 18)
+        self.declare_parameter("handover_min_valid_px", 30)
+        self.declare_parameter("handover_median_band_mm", 30.0)
+
+        self.handover_min_det_conf = float(self.get_parameter("handover_min_det_conf").value)
+        self.handover_min_track_conf = float(self.get_parameter("handover_min_track_conf").value)
+        self.handover_z_min_mm = float(self.get_parameter("handover_z_min_mm").value)
+        self.handover_z_max_mm = float(self.get_parameter("handover_z_max_mm").value)
+        self.handover_roi_px = int(self.get_parameter("handover_roi_px").value)
+        self.handover_min_valid_px = int(self.get_parameter("handover_min_valid_px").value)
+        self.handover_median_band_mm = float(self.get_parameter("handover_median_band_mm").value)
+
+        self.hand_detector = None
+        try:
+            self.hand_detector = MediaPipeHandDetector(
+                max_num_hands=1,
+                min_detection_confidence=self.handover_min_det_conf,
+                min_tracking_confidence=self.handover_min_track_conf,
+            )
+            self.get_logger().info("[HANDOVER] MediaPipeHandDetector initialized.")
+        except RuntimeError as e:
+            self.get_logger().warn(
+                f"[HANDOVER] MediaPipeHandDetector unavailable: {e}. "
+                "Handover functionality will be disabled."
+            )
+            self.hand_detector = None
+
         # Service Server
         self.srv = self.create_service(GetObjectPose, 'get_object_pose', self.handle_get_object_pose)
 
@@ -110,6 +146,67 @@ class TrackingNode(Node):
         self.estimator = PoseEstimator(intrinsics=intr)
         self.get_logger().info(f"PoseEstimator initialized: {intr}")
         return True
+
+    def _point_to_3d_heuristic(self, u: int, v: int, depth_image):
+        """
+        u,v (pixel) 주변 ROI에서 유효 depth의 median을 잡아서 3D로 변환.
+        RealSense aligned depth (mm) 기준.
+        """
+        h, w = depth_image.shape[:2]
+        u = max(0, min(w - 1, int(u)))
+        v = max(0, min(h - 1, int(v)))
+
+        r = self.handover_roi_px
+        x1 = max(0, u - r)
+        x2 = min(w, u + r + 1)
+        y1 = max(0, v - r)
+        y2 = min(h, v + r + 1)
+
+        roi = depth_image[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+
+        # 유효 depth 마스크 (mm 기준)
+        valid = (
+            np.isfinite(roi)
+            & (roi > self.handover_z_min_mm)
+            & (roi < self.handover_z_max_mm)
+        )
+        if int(valid.sum()) < self.handover_min_valid_px:
+            return None
+
+        vals = roi[valid].astype(np.float32)
+        z_med = float(np.median(vals))
+
+        # median band 안에서 ROI 중심에 가까운 픽셀 선택
+        band = valid & (np.abs(roi - z_med) <= self.handover_median_band_mm)
+        if int(band.sum()) < max(10, self.handover_min_valid_px // 3):
+            band = valid
+
+        ys, xs = np.where(band)
+        if len(xs) == 0:
+            return None
+
+        rc = (roi.shape[0] - 1) * 0.5
+        cc = (roi.shape[1] - 1) * 0.5
+        d2 = (ys - rc) ** 2 + (xs - cc) ** 2
+        idx = int(np.argmin(d2))
+
+        uu = x1 + int(xs[idx])
+        vv = y1 + int(ys[idx])
+        z = float(depth_image[vv, uu])
+        if not np.isfinite(z) or z <= 0.0:
+            return None
+
+        intr = self.camera.get_camera_intrinsic()
+        fx = float(intr["fx"])
+        fy = float(intr["fy"])
+        cx = float(intr.get("cx", intr.get("ppx")))
+        cy = float(intr.get("cy", intr.get("ppy")))
+
+        x = (uu - cx) * z / fx
+        y = (vv - cy) * z / fy
+        return float(x), float(y), float(z)
 
     def _detect_remote(self, color_bgr, object_name: str):
         """느리지만 정확한 Deep Learning 감지 + 좌표 정규화"""
@@ -237,13 +334,72 @@ class TrackingNode(Node):
             response.message = "Camera frames not ready"
             return response
 
-        bbox_norm = None
-        source = "none"
-        confidence = 0.0
+
+        # ----------------------------------------------------
+        # ✅ 0. HANDOVER 전용 처리 (MediaPipe Hand)
+        # ----------------------------------------------------
+        if object_name.lower() == "handover":
+            if self.hand_detector is None:
+                msg = "handover not available: MediaPipe / mediapipe is not installed"
+                self.get_logger().warn(f"[HANDOVER] {msg}")
+                response.success = False
+                response.message = msg
+                response.confidence = 0.0
+                response.bbox_norm = [0.0, 0.0, 0.0, 0.0]
+                return response
+
+            self.get_logger().info(
+                f"[HANDOVER] color shape={getattr(color, 'shape', None)}, "
+                f"dtype={getattr(color, 'dtype', None)}"
+            )
+            try:
+                det = self.hand_detector.detect(color)
+            except Exception as e:
+                self.get_logger().error(f"[HANDOVER] MediaPipe error: {e}")
+                response.success = False
+                response.message = f"MediaPipe error: {e}"
+                response.confidence = 0.0
+                response.bbox_norm = [0.0, 0.0, 0.0, 0.0]
+                return response
+
+            if det is None:
+                response.success = False
+                response.message = "No hand detected (mediapipe)"
+                response.confidence = 0.0
+                response.bbox_norm = [0.0, 0.0, 0.0, 0.0]
+                return response
+
+            xyz = self._point_to_3d_heuristic(det.u, det.v, depth)
+            if xyz is None:
+                response.success = False
+                response.message = "Invalid depth around hand (z=0 or insufficient valid pixels)"
+                response.confidence = float(det.confidence)
+                response.bbox_norm = [0.0, 0.0, 0.0, 0.0]
+                return response
+
+            x, y, z = xyz
+            pose_msg = PoseStamped()
+            pose_msg.header.frame_id = "camera_link"
+            pose_msg.header.stamp = self.get_clock().now().to_msg()
+            pose_msg.pose.position.x = x
+            pose_msg.pose.position.y = y
+            pose_msg.pose.position.z = z
+
+            response.success = True
+            response.message = f"ok (mediapipe:{det.handedness})"
+            response.pose = pose_msg
+            response.confidence = float(det.confidence)
+            # handover는 bbox 의미가 없으니 0으로 채움
+            response.bbox_norm = [0.0, 0.0, 0.0, 0.0]
+            return response
 
         # ----------------------------------------------------
         # 1. Tracking Mode (OpenCV)
         # ----------------------------------------------------
+        bbox_norm = None
+        source = "none"
+        confidence = 0.0
+
         # 요청이 '추적 모드'이고, 이전에 같은 물체를 추적 중이었다면
         if use_tracking and self.tracker_initialized and self.tracking_object_name == object_name:
             success, trk_bbox = self._update_tracker(color)
