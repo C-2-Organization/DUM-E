@@ -552,6 +552,7 @@ class SkillManagerNode(Node):
                 response.message = message
                 response.confidence = confidence
                 response.final_pose = final_pose
+                return response
 
             elif cmd.skill_type == SkillCommand.PLACEMP:
                 self.get_logger().info(

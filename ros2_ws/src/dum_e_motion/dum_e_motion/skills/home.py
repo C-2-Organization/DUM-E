@@ -39,7 +39,7 @@ def run_home_skill(ctx: MotionContext) -> Tuple[bool, str, float, PoseStamped]:
         success = False
         message = f"home motion error: {e}"
         confidence = 0.0
-        ctx.node.get_logger.error(f"❌ home motion 중 예외: {e}")
+        ctx.node.get_logger().error(f"❌ home motion 중 예외: {e}")
     current_pos = get_current_posx()[0]
     final_pose = ctx.make_final_pose(current_pos[0], current_pos[1], current_pos[2])
     return success, message, confidence, final_pose
