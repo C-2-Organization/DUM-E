@@ -264,22 +264,126 @@ class SkillManagerNode(Node):
                     "🔔 RunSkill 요청: PLACE, 잡고있는 오브젝트를 지정한 위치에 놓습니다."
                 )
 
-                success, message, confidence, final_pose = place.run_place_skill(cmd, self.ctx)
+                # 1차 시도: 바로 PLACE
+                place_success, place_msg, place_conf, place_pose = place.run_place_skill(
+                    cmd, self.ctx
+                )
 
-                response.success = success
-                response.message = message
-                response.confidence = confidence
-                response.final_pose = final_pose
+                if place_success:
+                    response.success = True
+                    response.message = place_msg
+                    response.confidence = place_conf
+                    response.final_pose = place_pose
+                    return response
+
+                # ------------------------
+                # 여기부터는 "PLACE 실패" 후 리커버리 로직
+                # ------------------------
+                self.get_logger().warn(
+                    f"[PLACE] 1차 시도 실패(message='{place_msg}', conf={place_conf:.2f}), "
+                    f"FIND로 타겟을 재탐색 후 PLACE를 재시도합니다."
+                )
+
+                # 2) FIND 시도 (같은 object_name)
+                find_cmd = SkillCommand()
+                find_cmd.skill_type = SkillCommand.FIND
+                find_cmd.object_name = cmd.object_name
+                find_cmd.target_pose = PoseStamped()  # Find는 pose 안 씀
+                find_cmd.params_json = '{"max_search_time": 30.0, "scan_interval": 1.0}'
+
+                find_success, find_msg, find_conf, _ = find.run_find_skill(
+                    find_cmd, self.ctx
+                )
+
+                if not find_success:
+                    # FIND도 실패 → 최종 실패
+                    msg = (
+                        f"PLACE failed and FIND also failed. "
+                        f"place_msg='{place_msg}', find_msg='{find_msg}'"
+                    )
+                    self.get_logger().warn(f"[PLACE] {msg}")
+                    response.success = False
+                    response.message = msg
+                    response.confidence = max(place_conf, find_conf)
+                    response.final_pose = PoseStamped()
+                    return response
+
+                # 3) FIND 성공했으니, 다시 한 번 PLACE 재시도
+                self.get_logger().info(
+                    f"[PLACE] FIND 성공(conf={find_conf:.2f}), PLACE 재시도"
+                )
+
+                place2_success, place2_msg, place2_conf, place2_pose = place.run_place_skill(
+                    cmd, self.ctx
+                )
+
+                response.success = place2_success
+                response.message = place2_msg
+                response.confidence = place2_conf
+                response.final_pose = place2_pose if place2_success else PoseStamped()
                 return response
 
             elif cmd.skill_type == SkillCommand.TRACKING:
-                self.get_logger().info(f"🔔 RunSkill: TRACKING, {cmd.object_name}을 추적합니다.")
-                success, msg, conf, pose = tracking.run_tracking_skill(cmd, self.ctx)
+                self.get_logger().info(
+                    f"🔔 RunSkill: TRACKING, {cmd.object_name}을 추적합니다."
+                )
 
-                response.success = success
-                response.message = msg
-                response.confidence = conf
-                response.final_pose = pose
+                # 1차 시도: 바로 TRACKING
+                tracking_success, tracking_msg, tracking_conf, tracking_pose = (
+                    tracking.run_tracking_skill(cmd, self.ctx)
+                )
+
+                if tracking_success:
+                    response.success = True
+                    response.message = tracking_msg
+                    response.confidence = tracking_conf
+                    response.final_pose = tracking_pose
+                    return response
+
+                # ------------------------
+                # 여기부터는 "TRACKING 실패" 후 리커버리 로직
+                # ------------------------
+                self.get_logger().warn(
+                    f"[TRACKING] 1차 시도 실패(message='{tracking_msg}', conf={tracking_conf:.2f}), "
+                    f"FIND로 대상 재탐색 후 TRACKING을 재시도합니다."
+                )
+
+                # 2) FIND 시도 (같은 object_name)
+                find_cmd = SkillCommand()
+                find_cmd.skill_type = SkillCommand.FIND
+                find_cmd.object_name = cmd.object_name
+                find_cmd.target_pose = PoseStamped()
+                find_cmd.params_json = '{"max_search_time": 30.0, "scan_interval": 1.0}'
+
+                find_success, find_msg, find_conf, _ = find.run_find_skill(
+                    find_cmd, self.ctx
+                )
+
+                if not find_success:
+                    msg = (
+                        f"TRACKING failed and FIND also failed. "
+                        f"tracking_msg='{tracking_msg}', find_msg='{find_msg}'"
+                    )
+                    self.get_logger().warn(f"[TRACKING] {msg}")
+                    response.success = False
+                    response.message = msg
+                    response.confidence = max(tracking_conf, find_conf)
+                    response.final_pose = PoseStamped()
+                    return response
+
+                # 3) FIND 성공했으니, 다시 한 번 TRACKING 재시도
+                self.get_logger().info(
+                    f"[TRACKING] FIND 성공(conf={find_conf:.2f}), TRACKING 재시도"
+                )
+
+                tracking2_success, tracking2_msg, tracking2_conf, tracking2_pose = (
+                    tracking.run_tracking_skill(cmd, self.ctx)
+                )
+
+                response.success = tracking2_success
+                response.message = tracking2_msg
+                response.confidence = tracking2_conf
+                response.final_pose = tracking2_pose if tracking2_success else PoseStamped()
                 return response
 
             elif cmd.skill_type == SkillCommand.HANDOVER:
