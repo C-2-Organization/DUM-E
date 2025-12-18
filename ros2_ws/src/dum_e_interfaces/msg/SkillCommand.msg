@@ -10,6 +10,7 @@ uint8 HANDOVER=6
 uint8 SWIP=7
 uint8 DUMP=8
 uint8 PLACEMP=9
+uint8 BOXING=10
 
 uint8 skill_type
 string object_name

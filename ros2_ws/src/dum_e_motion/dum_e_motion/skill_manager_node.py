@@ -20,7 +20,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find, home, drop, place, tracking, handover, swip, dump, placemp
+from dum_e_motion.skills import pick, find, home, drop, place, tracking, handover, swip, dump, placemp, boxing
 
 ROBOT_ID = "dsr01"
 
@@ -586,6 +586,17 @@ class SkillManagerNode(Node):
                 response.message = msg2
                 response.confidence = conf2
                 response.final_pose = pose2 if success2 else PoseStamped()
+                return response
+
+            elif cmd.skill_type == SkillCommand.BOXING:
+                self.get_logger().info(
+                    f"🔔 RunSkill: BOXING, target='{cmd.object_name or 'human face'}'"
+                )
+                success, message, confidence, final_pose = boxing.run_boxing_skill(cmd, self.ctx)
+                response.success = success
+                response.message = message
+                response.confidence = confidence
+                response.final_pose = final_pose
                 return response
 
             else:
