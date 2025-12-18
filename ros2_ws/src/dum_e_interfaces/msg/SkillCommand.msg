@@ -7,6 +7,8 @@ uint8 DROP=3
 uint8 PLACE=4
 uint8 TRACKING=5
 uint8 HANDOVER=6
+uint8 SWIP=7
+uint8 DUMP=8
 uint8 PLACEMP=9
 
 uint8 skill_type

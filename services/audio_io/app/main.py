@@ -448,6 +448,38 @@ def _execute_plan(plan: dict) -> bool:
             executed_any = True
             continue
 
+        elif skill == "SWIP":
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.SWIP,
+                    object_name="",
+                    target_pose=None,
+                    params_json={},
+                    timeout_sec=30.0,
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
+                return False
+
+            executed_any = True
+            continue
+
+        elif skill == "DUMP":
+            try:
+                resp = call_run_skill(
+                    skill_type=SkillCommand.DUMP,
+                    object_name="",
+                    target_pose=None,
+                    params_json={},
+                    timeout_sec=30.0,
+                )
+            except Exception as e:
+                print(f"[AudioIO] ❌ /run_skill 호출 중 에러: {e}")
+                return False
+
+            executed_any = True
+            continue
+
         else:
             print(f"[AudioIO] ℹ 아직 지원하지 않는 스킬: {skill}")
 
