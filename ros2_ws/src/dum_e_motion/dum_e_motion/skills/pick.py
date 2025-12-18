@@ -14,6 +14,29 @@ from dum_e_motion.motion_context import MotionContext
 PICK_CONF_TH = 0.3
 GRIPPER_OFFSET = 215  # mm, 그리퍼 오프셋
 
+# ==============================================================================
+# Helper function
+# ==============================================================================
+
+def _has_valid_external_pose(ps: PoseStamped) -> bool:
+    """
+    외부에서 실제 의미 있는 target_pose를 넣어준 경우에만 True.
+    - frame_id가 비어있지 않고
+    - position이 완전히 (0,0,0)인 기본값이 아닐 때만 인정.
+    """
+    if ps is None:
+        return False
+
+    if not ps.header.frame_id:
+        return False
+
+    p = ps.pose.position
+    if abs(p.x) < 1e-6 and abs(p.y) < 1e-6 and abs(p.z) < 1e-6:
+        # 기본 생성된 PoseStamped()라고 판단
+        return False
+
+    return True
+
 
 # ==============================================================================
 # 휴리스틱 기반 Grasp 계산
@@ -135,11 +158,13 @@ def run_pick_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str, fl
     # ------------------------------------------------------------------
     # CASE A: 외부 Target Pose 사용 (직접 좌표 지정)
     # ------------------------------------------------------------------
-    if cmd.target_pose.header.frame_id:
+    if _has_valid_external_pose(cmd.target_pose):
         cam_pose = cmd.target_pose
         confidence = 1.0
         grasp_angle_rad = 0.0
-        ctx.node.get_logger().info("[PICK] Using external target pose")
+        ctx.node.get_logger().info(
+            f"[PICK] Using external target pose (frame_id={cmd.target_pose.header.frame_id})"
+        )
 
     # ------------------------------------------------------------------
     # CASE B: Perception + Heuristic 기반 (기본 모드)
@@ -186,7 +211,10 @@ def run_pick_skill(cmd: SkillCommand, ctx: MotionContext) -> Tuple[bool, str, fl
     tcp_cam_pose.pose.position.z = cam_pose.pose.position.z - GRIPPER_OFFSET
     tcp_cam_pose.pose.orientation = cam_pose.pose.orientation
 
-    if tcp_cam_pose.pose.position.z <= 0.05:
+    if tcp_cam_pose.pose.position.z <= 50:
+        ctx.node.get_logger().warn(
+            f"[PICK] Calculated tcp_cam_z={tcp_cam_pose.pose.position.z:.3f} <= 50, abort"
+        )
         return False, "Calculated Z is too close/negative", confidence, PoseStamped()
 
     # 2. Camera -> Base 좌표 변환

@@ -12,7 +12,7 @@ from dum_e_interfaces.srv import GetObjectPose
 from dsr_msgs2.srv import MoveStop, MovePause, MoveResume
 
 ROBOT_ID = "dsr01"
-
+OPEN_EPS_MM = 5.0
 
 class MotionCancelled(Exception):
     """
@@ -58,6 +58,13 @@ class MotionContext:
 
         self.motion = MotionAPI(self)
 
+    def is_gripper_open(self) -> bool:
+        width_mm = self.gripper.get_width()
+        max_width_mm = self.gripper.max_width / 10.0
+        is_open = width_mm >= (max_width_mm - OPEN_EPS_MM)
+
+        return is_open
+
     # ------------------------------------------------------------------
     # perception에 pose 요청 (임시 노드 사용)
     # ------------------------------------------------------------------
@@ -74,7 +81,7 @@ class MotionContext:
         self.node.get_logger().info(
             f"Waiting for /get_object_pose service (object='{object_name}', mode={mode_str})..."
         )
-        
+
         if not client.wait_for_service(timeout_sec=5.0):
             self.node.get_logger().error("❌ /get_object_pose 서비스가 준비되지 않았습니다. (timeout)")
             tmp_node.destroy_node()
@@ -82,8 +89,8 @@ class MotionContext:
 
         req = GetObjectPose.Request()
         req.object_name = object_name
-        
-        req.use_tracking = use_tracking 
+
+        req.use_tracking = use_tracking
 
         future = client.call_async(req)
         rclpy.spin_until_future_complete(tmp_node, future)
