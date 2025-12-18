@@ -3,6 +3,7 @@
 import os
 import numpy as np
 from std_msgs.msg import String
+import traceback
 
 import rclpy
 from rclpy.node import Node
@@ -224,7 +225,7 @@ class SkillManagerNode(Node):
             elif cmd.skill_type == SkillCommand.TRACKING:
                 self.get_logger().info(f"🔔 RunSkill: TRACKING, {cmd.object_name}을 추적합니다.")
                 success, msg, conf, pose = tracking.run_tracking_skill(cmd, self.ctx)
-                
+
                 response.success = success
                 response.message = msg
                 response.confidence = conf
@@ -252,6 +253,7 @@ class SkillManagerNode(Node):
 
         except Exception as e:
             self.get_logger().error(f"[SkillManager] Unexpected error: {e}")
+            traceback.print_exc()
             response.success = False
             response.message = f"Unexpected error: {e}"
             response.confidence = 0.0
