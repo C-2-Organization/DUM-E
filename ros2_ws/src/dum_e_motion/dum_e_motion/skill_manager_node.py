@@ -480,12 +480,12 @@ class SkillManagerNode(Node):
                     "🔔 RunSkill 요청: SWIP, 바닥을 닦습니다."
                 )
 
-                success, message, confidence = swip.run_swip_skill(self.ctx)
+                success, message, confidence, final_pose = swip.run_swip_skill(self.ctx)
 
                 response.success = success
                 response.message = message
                 response.confidence = confidence
-                response.final_pose = PoseStamped()
+                response.final_pose = final_pose
                 return response
 
             elif cmd.skill_type == SkillCommand.DUMP:
@@ -493,12 +493,12 @@ class SkillManagerNode(Node):
                     "🔔 RunSkill 요청: DUMP, 쓰레기를 버립니다."
                 )
 
-                success, message, confidence = dump.run_dump_skill(self.ctx)
+                success, message, confidence, final_pose = dump.run_dump_skill(self.ctx)
 
                 response.success = success
                 response.message = message
                 response.confidence = confidence
-                response.final_pose = PoseStamped()
+                response.final_pose = final_pose
                 return response
 
             else:
