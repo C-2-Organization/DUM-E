@@ -10,7 +10,7 @@ from dum_e_interfaces.msg import SkillCommand
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
 
 # 이 이상일 때 "찾았다"라고 인정
-FIND_CONF_TH = 0.3
+FIND_CONF_TH = 0.6
 
 # 책상 위(inside) 스캔 패턴 설정 (deg)
 SCAN_STEP_DEG = 15.0

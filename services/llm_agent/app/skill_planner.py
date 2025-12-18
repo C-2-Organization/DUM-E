@@ -314,27 +314,132 @@ HANDOVER
 - Purpose: Hand the object to the user by moving near the user's hand and opening the gripper.
 - Moves arm: Yes.
 - Use when:
-  - The user asks the robot to give / pass / hand something to them (KR/EN).
-  - Examples: "Give me the hammer", "Hand me the cup", "나한테 건네줘", "내 손에 줘".
-
+  - The user asks the robot to give / pass / hand something **to the user** (KR/EN).
+  - Phrases that explicitly reference the user or their hand, such as:
+    - "give me X", "hand me X", "pass me X"
+    - "나한테 X 줘", "내 손에 줘", "손에 쥐어줘"
+    - Commands like "망치 좀 줄래?", "컵 좀 건네줘" even without saying "here".
 - Object rules:
-  - object.raw: original user phrase (e.g., "give me the hammer", "나한테 망치 줘").
+  - object.raw: original user phrase about the object (e.g., "망치", "the hammer").
   - object.canonical_en: MUST be the grounded object name (e.g., "hammer", "cup", "phone").
   - canonical_en MUST NOT be "handover".
-
 - Planning rules (logical):
+  - Use HANDOVER when the *recipient* is clearly the user (me/my hand/나/내 손),
+    even if the user also says "here" or "right here".
   - The low-level system will decide whether PICK is needed based on gripper state.
   - The planner SHOULD NOT assume detailed gripper state.
-  - The planner SHOULD:
-    - Use HANDOVER when the user’s intent is “give/pass/hand me X”.
-    - Ensure canonical_en is the correct object name.
   - If the user says only "Hand me that" or "나한테 건네줘" with no identifiable object:
     - command_mode="clarify"
     - Ask ONE question to identify which object to hand over.
-
 - Params (optional):
   - wait_sec (float): seconds to pause after reaching the hand before opening the gripper.
     - If omitted, default is acceptable.
+
+
+PLACEMP
+- Purpose: Place the currently held object at a user-indicated **spatial point** near their index finger,
+  using MediaPipe hand detection (e.g., "here", "right here").
+- Moves arm: Yes.
+- Trigger rules (VERY IMPORTANT):
+  - Use PLACEMP when the user mainly specifies a **location like "here/이쪽"** rather than "to me".
+  - Typical phrases:
+    - "Put it here", "Place it right here", "leave it here"
+    - "여기 놔줘", "이쪽에 놔줘", "바로 여기에 내려놔"
+  - If the command clearly says "to me / to my hand / 나한테 / 내 손에",
+    you MUST prefer HANDOVER instead of PLACEMP, even if "here" is also present.
+- Object rules:
+  - PLACEMP is primarily location-driven; the object is usually already in the gripper.
+  - In most cases:
+    - object.raw = null
+    - object.canonical_en = null
+  - If the utterance still names the object (e.g., "put the cup here"), this is allowed, but
+    the core distinction is that the **target** is a pointing / "here" position, not the abstract user.
+- Params: {}
+- Preconditions:
+  - The robot is already holding an object to be placed.
+- Examples (use PLACEMP):
+  - "Put it right here." (with pointing gesture in the image)
+  - "여기 내려놔."
+  - "이쪽에 놔줘."
+- Examples (use HANDOVER instead, NOT PLACEMP):
+  - "Give it to me here."
+  - "내 손에 여기로 줘."
+  - "나한테 이쪽으로 건네줘."
+
+────────────────────────────────────────
+HANDOVER VS PLACEMP DECISION RULES (CRITICAL)
+────────────────────────────────────────
+When intent is to **transfer or place** an object near the user:
+
+1) If the user’s language focuses on **the user as recipient**:
+   - Keywords / patterns:
+     - English: "me", "to me", "to my hand", "in my hand", "for me"
+     - Korean: "나한테", "내게", "내 손에", "손에 쥐어줘", "건네줘", "줘"
+   - Even if "here" or "이쪽" also appears (e.g., "give it to me here"):
+     → You MUST choose HANDOVER.
+
+2) If the user’s language focuses on a **spatial location** like "here/이쪽/바로 여기" without clearly
+   emphasizing "to me / my hand":
+   - Keywords / patterns:
+     - English: "here", "right here", "over here", "there" (with pointing)
+     - Korean: "여기", "이쪽", "요기", "바로 여기", "이 자리"
+   - Typical semantics: "place/put/leave it at this point I'm indicating."
+   - In this case:
+     → You MUST choose PLACEMP.
+
+3) If both user-recipient and spatial-point appear:
+   - e.g., "Put it in my hand here", "내 손에 여기로 줘"
+   - The primary intent is still giving the object **to the user**.
+   - You MUST choose HANDOVER.
+
+4) If the phrasing is ambiguous but strongly resembles "give/pass/hand to user" in meaning:
+   - e.g., "망치 좀 줄래?", "컵 좀 줘", "그거 내 쪽으로 줘"
+   - Treat this as HANDOVER, not PLACEMP.
+
+5) PLACEMP should **never** be used solely because the word "here" appears.
+   - "Give me the hammer here" → HANDOVER
+   - "Place it here on the desk" (no "to me") → PLACEMP
+
+────────────────────────────────────────
+PLACEMP PRECONDITION & AUTO-PICK RULES (CRITICAL)
+────────────────────────────────────────
+PLACEMP may ONLY be planned if the robot is ALREADY holding an object.
+
+If the user request implies:
+- “pick up X and place it here”
+- “grab the tissue and put it here”
+- “휴지 잡아서 이쪽에 놔줘”
+then the plan MUST automatically include PICK(object) BEFORE PLACEMP.
+
+RULES:
+1. If PLACEMP target (the location) is clear but object is NOT held:
+   - The plan MUST:
+       step1: PICK(object)
+       step2: PLACEMP()
+
+2. If the object name is missing or unclear:
+   - command_mode="clarify"
+   - Ask which object to pick.
+
+3. If the object is already held:
+   - Only PLACEMP should be used as the skill.
+
+4. planner MUST NEVER:
+   - run PLACEMP as the first skill for an object not already in the gripper.
+   - assume PLACE or HANDOVER instead of PICK+PLACEMP when target is a pointing location.
+
+EXAMPLES:
+
+“Put the cup here”
+→ If holding:        PLACEMP()
+→ If not holding:    PICK(cup) → PLACEMP()
+
+“구겨진 휴지 잡아서 이쪽에 놔줘”
+→ PICK(crumpled tissue) → PLACEMP()
+
+“Place it right here”
+→ If holding:        PLACEMP()
+→ If not holding:    CLARIFY (which object?)
 
 ────────────────────────────────────────
 PLANNING RULES
