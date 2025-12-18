@@ -1,5 +1,6 @@
 # dum_e_motion/skill_manager_node.py
 #!/usr/bin/env python3
+import time
 import os
 import numpy as np
 from std_msgs.msg import String
@@ -19,7 +20,7 @@ from dum_e_interfaces.srv import RunSkill
 from dum_e_interfaces.msg import SkillCommand
 from dum_e_utils.onrobot import RG
 from dum_e_motion.motion_context import MotionContext, MotionCancelled
-from dum_e_motion.skills import pick, find, home, drop, place, tracking, handover
+from dum_e_motion.skills import pick, find, home, drop, place, tracking, handover, placemp
 
 ROBOT_ID = "dsr01"
 
@@ -135,6 +136,58 @@ class SkillManagerNode(Node):
             cmd, self.ctx
         )
         return success2, message2, confidence2, final_pose2 if success2 else PoseStamped()
+
+    def _run_placemp_with_hand_fallback(self, cmd: SkillCommand):
+        """
+        PLACEMP fallback:
+          - 이미 1차 PLACEMP가 실패한 뒤 호출된다고 가정
+          - 여기서는 FIND("human hand")로 사용자 손을 다시 찾은 뒤,
+            PLACEMP를 한 번 더 시도한다.
+        """
+        # 1) FIND("human hand")로 손 위치 재탐색
+        self.get_logger().warn(
+            "[PLACEMP] 1차 PLACEMP 실패 → FIND('human hand')로 손 위치를 재탐색합니다."
+        )
+
+        find_cmd = SkillCommand()
+        find_cmd.skill_type = SkillCommand.FIND
+        find_cmd.object_name = "human hand"   # 🔹 person이 아니라 human hand
+        find_cmd.target_pose = PoseStamped()  # FIND는 pose 안 씀
+        find_cmd.params_json = (
+            '{"max_search_time": 30.0, "scan_interval": 1.0, "search_region": "desk"}'
+        )
+
+        find_success, find_msg, find_conf, _ = find.run_find_skill(
+            find_cmd, self.ctx
+        )
+
+        time.sleep(1.0)
+
+        if not find_success:
+            # FIND도 실패 → 최종 실패
+            msg = (
+                f"PLACEMP failed and FIND('human hand') also failed. "
+                f"find_msg='{find_msg}'"
+            )
+            self.get_logger().warn(f"[PLACEMP] {msg}")
+            return False, msg, find_conf, PoseStamped()
+
+        # 2) FIND("human hand") 성공 → PLACEMP 재시도
+        self.get_logger().info(
+            f"[PLACEMP] FIND('human hand') 성공(conf={find_conf:.2f}), PLACEMP 재시도"
+        )
+
+        success2, message2, confidence2, final_pose2 = placemp.run_placemp_skill(
+            cmd, self.ctx
+        )
+
+        # 전체 신뢰도는 FIND와 PLACEMP 중 작은 값 사용 (보수적으로)
+        combined_conf = min(find_conf, confidence2)
+
+        if success2:
+            return True, message2, combined_conf, final_pose2
+        else:
+            return False, message2, combined_conf, PoseStamped()
 
     # ------------------------------------------------------------------
     # /run_skill 서비스 콜백
@@ -473,6 +526,40 @@ class SkillManagerNode(Node):
                     response.confidence = confidence
                     response.final_pose = final_pose
                     return response
+
+            elif cmd.skill_type == SkillCommand.PLACEMP:
+                self.get_logger().info(
+                    "🔔 RunSkill 요청: PLACEMP, 검지손가락 위치에 오브젝트를 놓습니다."
+                )
+
+                # 1차 시도: 바로 PLACEMP (현재 카메라 화면 기준 MediaPipe)
+                placemp_success, placemp_msg, placemp_conf, placemp_pose = (
+                    placemp.run_placemp_skill(cmd, self.ctx)
+                )
+
+                if placemp_success:
+                    response.success = True
+                    response.message = placemp_msg
+                    response.confidence = placemp_conf
+                    response.final_pose = placemp_pose
+                    return response
+
+                # ------------------------
+                # 여기부터는 "PLACEMP 실패" 후 리커버리 로직
+                # ------------------------
+                self.get_logger().warn(
+                    f"[PLACEMP] 1차 시도 실패(message='{placemp_msg}', conf={placemp_conf:.2f}), "
+                    f"FIND('human hand')로 손 위치를 재탐색 후 PLACEMP를 재시도합니다."
+                )
+
+                # 2) FIND('human hand') + 재 PLACEMP
+                success2, msg2, conf2, pose2 = self._run_placemp_with_hand_fallback(cmd)
+
+                response.success = success2
+                response.message = msg2
+                response.confidence = conf2
+                response.final_pose = pose2 if success2 else PoseStamped()
+                return response
 
             else:
                 msg = f"skill_type={cmd.skill_type} 은(는) 아직 구현되지 않았습니다."

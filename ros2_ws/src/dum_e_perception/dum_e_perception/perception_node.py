@@ -334,14 +334,15 @@ class TrackingNode(Node):
             response.message = "Camera frames not ready"
             return response
 
+        obj = object_name.lower()
 
         # ----------------------------------------------------
-        # ✅ 0. HANDOVER 전용 처리 (MediaPipe Hand)
+        # ✅ 0. HANDOVER / PLACEMP (MediaPipe Hand 기반)
         # ----------------------------------------------------
-        if object_name.lower() == "handover":
+        if obj in ("handover", "placemp"):
             if self.hand_detector is None:
-                msg = "handover not available: MediaPipe / mediapipe is not installed"
-                self.get_logger().warn(f"[HANDOVER] {msg}")
+                msg = f"{obj} not available: MediaPipe / mediapipe is not installed"
+                self.get_logger().warn(f"[{obj.upper()}] {msg}")
                 response.success = False
                 response.message = msg
                 response.confidence = 0.0
@@ -349,13 +350,17 @@ class TrackingNode(Node):
                 return response
 
             self.get_logger().info(
-                f"[HANDOVER] color shape={getattr(color, 'shape', None)}, "
+                f"[{obj.upper()}] color shape={getattr(color, 'shape', None)}, "
                 f"dtype={getattr(color, 'dtype', None)}"
             )
+
+            # 👇 모드 선택: handover = 손바닥 중심, placemp = 검지 끝
+            mode = "palm_center" if obj == "handover" else "index_tip"
+
             try:
-                det = self.hand_detector.detect(color)
+                det = self.hand_detector.detect(color, mode=mode)
             except Exception as e:
-                self.get_logger().error(f"[HANDOVER] MediaPipe error: {e}")
+                self.get_logger().error(f"[{obj.upper()}] MediaPipe error: {e}")
                 response.success = False
                 response.message = f"MediaPipe error: {e}"
                 response.confidence = 0.0
@@ -364,7 +369,7 @@ class TrackingNode(Node):
 
             if det is None:
                 response.success = False
-                response.message = "No hand detected (mediapipe)"
+                response.message = f"No hand detected (mediapipe:{mode})"
                 response.confidence = 0.0
                 response.bbox_norm = [0.0, 0.0, 0.0, 0.0]
                 return response
@@ -386,10 +391,10 @@ class TrackingNode(Node):
             pose_msg.pose.position.z = z
 
             response.success = True
-            response.message = f"ok (mediapipe:{det.handedness})"
+            response.message = f"ok ({obj}: {det.handedness}, mode={mode})"
             response.pose = pose_msg
             response.confidence = float(det.confidence)
-            # handover는 bbox 의미가 없으니 0으로 채움
+            # handover / placemp 둘 다 bbox는 의미 없으니 0으로 채움
             response.bbox_norm = [0.0, 0.0, 0.0, 0.0]
             return response
 
