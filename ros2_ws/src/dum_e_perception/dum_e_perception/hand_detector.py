@@ -47,7 +47,12 @@ class MediaPipeHandDetector:
             min_tracking_confidence=min_tracking_confidence,
         )
 
-    def detect(self, color_bgr) -> Optional[HandDetection]:
+    def detect(self, color_bgr, mode: str = "palm_center") -> Optional[HandDetection]:
+        """
+        mode:
+          - "palm_center": 손바닥 중심 (기존 handover 용)
+          - "index_tip":   검지손가락 끝 (PLACEMP 용)
+        """
         if color_bgr is None:
             return None
 
@@ -82,12 +87,18 @@ class MediaPipeHandDetector:
 
         lm = res.multi_hand_landmarks[best_idx].landmark
 
-        # “손바닥 중심”을 안정적으로: wrist(0) + MCP(5,9,13,17) 평균
-        idxs = [0, 5, 9, 13, 17]
-        xs = [lm[i].x for i in idxs]
-        ys = [lm[i].y for i in idxs]
-        cx = sum(xs) / len(xs)
-        cy = sum(ys) / len(ys)
+        # 📌 모드에 따라 좌표 선택
+        if mode == "index_tip":
+            # MediaPipe Hands에서 검지손가락 tip = 8번 landmark
+            cx = lm[8].x
+            cy = lm[8].y
+        else:
+            # 기본: 손바닥 중심 (wrist + MCP 평균)
+            idxs = [0, 5, 9, 13, 17]
+            xs = [lm[i].x for i in idxs]
+            ys = [lm[i].y for i in idxs]
+            cx = sum(xs) / len(xs)
+            cy = sum(ys) / len(ys)
 
         u = int(round(cx * w))
         v = int(round(cy * h))
