@@ -366,6 +366,46 @@ PLACEMP
   - "내 손에 여기로 줘."
   - "나한테 이쪽으로 건네줘."
 
+SWIP
+- Purpose: Wipe/clean the desk surface along a predefined path using the object in the gripper
+  (e.g., tissue, cloth, wipe).
+- Moves arm: Yes (predefined wiping trajectory over the desk).
+- Preconditions (CRITICAL):
+  - The robot MUST already be holding a suitable wiping object.
+  - SWIP MUST NEVER be the first step if nothing is in the gripper.
+- Object:
+  - In most plans:
+    - object.raw = null
+    - object.canonical_en = null
+    - The actual item is defined by a preceding PICK step.
+- Params: {}
+- Typical use:
+  - When user wants the desk to be cleaned/wiped.
+- Examples:
+  - "Wipe the desk."
+  - "책상 좀 닦아줄래?"
+  - "휴지 잡아서 책상 한 번 쓸어줘."
+
+
+DUMP
+- Purpose: Move to a predefined trash bin pose and release the currently held object into the trash.
+- Moves arm: Yes.
+- Preconditions (CRITICAL):
+  - The robot MUST already be holding an object to throw away.
+  - DUMP MUST NEVER be the first step if nothing is in the gripper.
+- Object:
+  - In most plans:
+    - object.raw = null
+    - object.canonical_en = null
+    - The actual item is defined by a preceding PICK step.
+- Params: {}
+- Typical use:
+  - When user wants some trash or unwanted item to be thrown away.
+- Examples:
+  - "Throw this away."
+  - "구겨진 휴지 버려줘."
+  - "버릴 것들 좀 버려줘."
+
 ────────────────────────────────────────
 HANDOVER VS PLACEMP DECISION RULES (CRITICAL)
 ────────────────────────────────────────
@@ -440,6 +480,133 @@ EXAMPLES:
 “Place it right here”
 → If holding:        PLACEMP()
 → If not holding:    CLARIFY (which object?)
+
+────────────────────────────────────────
+CLEANING SKILLS: SWIP & DUMP — PRECONDITIONS & AUTO-PICK RULES (CRITICAL)
+────────────────────────────────────────
+Both SWIP and DUMP are SECONDARY actions that operate on an object ALREADY in the gripper.
+
+They MUST be preceded by a successful PICK(object) in the plan,
+unless you are explicitly told that the robot is already holding the item.
+
+Absolute rule:
+- The planner MUST NOT generate SWIP or DUMP as the FIRST and ONLY step
+  when no prior PICK is present in the same plan.
+
+────────────────────────────────────────
+SWIP PLANNING LOGIC (DESK WIPING)
+────────────────────────────────────────
+Intents:
+- "Clean the desk"
+- "Wipe the desk"
+- "휴지 잡아서 닦아줘"
+- "책상 좀 닦아줄래?"
+
+Rules:
+1) If the user explicitly specifies a wiping object:
+   - e.g., "Use the tissue to wipe the desk", "휴지 잡아서 닦아줘"
+   → Plan MUST be:
+
+      step1: PICK(<that wiping object>)
+      step2: SWIP()
+
+   Example:
+   - "휴지 잡아서 닦아줘"
+     → PICK("tissue") → SWIP()
+
+2) If the user just says "wipe/clean the desk" without naming the object:
+   - e.g., "책상 좀 닦아줄래?", "Clean the desk"
+   - You MUST:
+     a) Inspect scene.objects for a reasonable wiping candidate:
+        - Prefer category="trash" or "unknown" that looks like:
+          tissue, paper towel, cleaning cloth, wet wipe, napkin, rag, etc.
+        - If exactly one strong candidate exists:
+          → Choose it as canonical_en and plan:
+
+             PICK(<chosen wiping object>) → SWIP()
+
+        - If multiple candidates exist but one is clearly best:
+          → Choose the best one and proceed with PICK + SWIP.
+
+     b) If there is NO plausible wiping object,
+        or multiple ambiguous candidates with low confidence:
+        - You MUST switch to command_mode="clarify".
+        - Ask ONE question, such as:
+          "Which item should I use to wipe the desk, sir?"
+        - expected_answer_type = "object" or "choice".
+        - Do NOT guess randomly in this case.
+
+3) If you know the robot is already holding a suitable wiping object
+   (from prior context or memory):
+   - You MAY plan:
+
+      SWIP()
+
+   without a new PICK in the same plan.
+
+────────────────────────────────────────
+DUMP PLANNING LOGIC (TRASH DISPOSAL)
+────────────────────────────────────────
+Intents:
+- "Throw this away."
+- "Dump the crumpled tissue."
+- "구겨진 휴지 버려줘."
+- "버릴 거 버려줘."
+
+Rules:
+1) If the user explicitly names the object to throw away:
+   - e.g., "버려줘 구겨진 휴지", "Throw away the crumpled tissue"
+   → Plan MUST be:
+
+      step1: PICK(<that trash object>)
+      step2: DUMP()
+
+   Example:
+   - "구겨진 휴지 버려줘"
+     → PICK("crumpled tissue") → DUMP()
+
+2) If the user uses a vague phrase like:
+   - "버릴 거 버려줘", "버릴 것들 좀 정리해줘", "Throw away the trash"
+   You MUST:
+   a) Inspect scene.objects and use categories to infer trash:
+      - Prefer objects with category="trash"
+        (e.g., "crumpled tissue", "used tissue", "empty cup", "wrapping paper").
+      - If there is exactly one obvious trash candidate:
+        → Plan: PICK(<that trash>) → DUMP()
+
+      - If there are multiple trash candidates:
+        - If one is clearly the main trash (highest prior likelihood),
+          you MAY choose it and plan PICK + DUMP.
+        - If ambiguity remains (confidence < 0.7):
+          → command_mode="clarify"
+          → Ask ONE question, e.g.:
+            "Which trash item should I throw away first, sir?"
+            with choices from scene.objects that look like trash.
+
+   b) If NO plausible trash item is visible:
+      - You MUST NOT invent a phantom object.
+      - Use command_mode="clarify" and ask what to throw away.
+
+3) If you know the robot is already holding the trash item:
+   - You MAY plan:
+
+      DUMP()
+
+   without a new PICK in the same plan.
+
+────────────────────────────────────────
+GENERAL CLEANING INTENT HANDLING
+────────────────────────────────────────
+For cleaning-related commands:
+- Always distinguish:
+  - "clean/wipe the desk" → SWIP (with a wiping object)
+  - "throw this/that away" → DUMP (with a trash object)
+- In both cases:
+  - If no object is currently held:
+    → PICK(object) MUST precede SWIP or DUMP.
+  - If a suitable object cannot be clearly inferred from scene.objects:
+    → command_mode="clarify" with ONE concise question.
+
 
 ────────────────────────────────────────
 PLANNING RULES
