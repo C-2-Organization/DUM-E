@@ -75,7 +75,7 @@ class TrackingNode(Node):
         # ----------------------------
         self.declare_parameter("remote_endpoint", "http://3.39.1.188:8000/detect")
         self.declare_parameter("remote_top_k", 5)
-        self.declare_parameter("remote_box_threshold", 0.35)
+        self.declare_parameter("remote_box_threshold", 0.45)
         self.declare_parameter("remote_text_threshold", 0.25)
 
         self.remote_endpoint = self.get_parameter("remote_endpoint").value

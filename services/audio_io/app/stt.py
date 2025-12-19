@@ -29,7 +29,7 @@ class StreamingSTT:
         chunk_duration: float = 0.5,   # 한 번에 0.5초씩 읽기
         silence_sec: float = 2.0,      # 2초 이상 조용하면 종료
         max_total_sec: float = 60.0,   # 안전장치: 최대 60초까지만 듣기
-        energy_threshold: float = 200, # 이 값 이상이면 '사람이 말하는 중'이라고 간주
+        energy_threshold: float = 400, # 이 값 이상이면 '사람이 말하는 중'이라고 간주
     ):
         api_key = get_env("OPENAI_API_KEY")
         if not api_key:
@@ -126,9 +126,18 @@ class StreamingSTT:
 
             print(f"[STT] 🗣 VAD speech_ratio={speech_ratio:.2f}")
 
+            if self.ambient_energy is None and speech_ratio < 0.1:
+                ambient_samples.append(block_energy)
+                if now >= ambient_end_time and ambient_samples:
+                    self.ambient_energy = float(np.mean(ambient_samples))
+                    print(f"[STT] 🌡 ambient_energy 추정: {self.ambient_energy:.2f}")
+            ambient = self.ambient_energy or block_energy
+
+            adaptive_threshold = max(self.energy_threshold, ambient * 2.0)
+
             # 5) noise gate + VAD 동시 조건
             is_speech_block = (
-                block_energy > adaptive_threshold and speech_ratio > 0.3
+                speech_ratio > 0.3 or block_energy > adaptive_threshold
             )
 
             if is_speech_block:
