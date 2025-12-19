@@ -30,15 +30,22 @@ MIN_Z = 200.0                # 바닥 충돌 방지 높이 [mm]
 # ---------------------------------------------------------
 # BOXING 전용 설정값
 # ---------------------------------------------------------
-JAB_FORWARD_MM = 1000.0       # 잽으로 앞으로 나가는 기본 거리 [mm] (카메라 → 얼굴 방향)
+# ⚠ 기존 5000mm는 거의 무조건 워크스페이스 밖으로 나감
+JAB_FORWARD_MM = 120.0       # 기본 잽 목표 길이 [mm]
+SAFE_FACE_MARGIN = 200.0     # 얼굴 앞에서 최소로 남겨둘 거리 [mm]
+MAX_JAB_STEP = 150.0         # 한 번에 허용하는 최대 잽 길이 [mm]
+
 JAB_BACK_RATIO = 1.0         # 잽 후 원래 위치로 얼마나 되돌아올지 (1.0 = 완전 복귀)
 JAB_HOLD_SEC = 0.1           # 잽 자세로 잠깐 유지하는 시간 [sec]
 
 JAB_MIN_INTERVAL = 1.0       # 최소 잽 간격 [sec]
 JAB_MAX_INTERVAL = 2.5       # 최대 잽 간격 [sec]
 
-# 기본적으로 한 번 트래킹-복귀까지가 하나의 스킬. 필요하면 나중에 확장 가능.
-MAX_BOXING_DURATION = 15.0   # 전체 BOXING 스킬 최대 지속시간 [sec]
+# 움직임 속도/가속도 (가드/잽/복귀 모두 동일하게 사용)
+VEL = [250, 500]
+ACC = [250, 400]
+
+MAX_BOXING_DURATION = 180.0  # 전체 BOXING 스킬 최대 지속시간 [sec]
 
 
 def _normalize(v: np.ndarray, eps: float = 1e-9):
@@ -101,11 +108,11 @@ def run_boxing_skill(cmd: SkillCommand, ctx: MotionContext):
       * 카메라 시선(+Z)이 타겟을 바라보도록 orientation 제어
       * 카메라-타겟 Z 거리 제어 (TARGET_DIST_Z 근처 유지)
     - 추가로:
-      * 주기적으로 타겟 방향으로 일정 거리(JAB_FORWARD_MM)만큼
-        손을 내밀었다가 다시 원래 위치로 복귀.
+      * 주기적으로 타겟 방향으로 일정 거리만큼 손을 내밀었다가
+        다시 원래 guard 자세로 복귀.
     """
 
-    from DSR_ROBOT2 import get_current_posx, DR_MV_MOD_ABS
+    from DSR_ROBOT2 import get_current_posx, DR_MV_MOD_ABS, posx
 
     object_name = cmd.object_name.strip() if cmd.object_name else "face"
     ctx.node.get_logger().info(
@@ -145,6 +152,26 @@ def run_boxing_skill(cmd: SkillCommand, ctx: MotionContext):
 
     # 직전 "가드 자세" (잽을 뻗기 전의 TCP pose)
     guard_pos = None  # [x,y,z,a,b,c]
+
+    # 시작 위치: 복싱 링으로 이동
+    ctx.motion.close_gripper()
+    init_pos = posx(450, -350, 480, 90, -90, -90)
+    ctx.node.get_logger().info("복싱링으로 이동합니다.")
+    try:
+        ctx.motion.movel(
+            init_pos,
+            vel=VEL,
+            acc=ACC,
+            mod=DR_MV_MOD_ABS,
+        )
+    except MotionCancelled:
+        ctx.node.get_logger().warn("[BOXING] Motion cancelled while moving to boxing ring.")
+        execute_home_motion(ctx)
+        return False, "Cancelled before boxing start", 0.0, PoseStamped()
+    except Exception as e:
+        ctx.node.get_logger().error(f"[BOXING] Failed to move to initial boxing pose: {e}")
+        execute_home_motion(ctx)
+        return False, f"Init move failed: {e}", 0.0, PoseStamped()
 
     while not ctx.is_cancelled():
         now = time.time()
@@ -245,9 +272,9 @@ def run_boxing_skill(cmd: SkillCommand, ctx: MotionContext):
 
         if abs(step_z_cam) > 1e-6:
             step_vec_cam = np.array([0.0, 0.0, step_z_cam], dtype=float)
-            v_tcp = R_c_g @ step_vec_cam
-            v_base = R_base_tcp @ v_tcp
-            new_xyz = xyz + v_base
+            v_tcp_step = R_c_g @ step_vec_cam
+            v_base_step = R_base_tcp @ v_tcp_step
+            new_xyz = xyz + v_base_step
         else:
             new_xyz = xyz.copy()
 
@@ -312,8 +339,8 @@ def run_boxing_skill(cmd: SkillCommand, ctx: MotionContext):
         try:
             ctx.motion.movel(
                 target_pos_guard,
-                vel=ctx.LIN_VEL,
-                acc=ctx.LIN_ACC,
+                vel=VEL,
+                acc=ACC,
                 mod=DR_MV_MOD_ABS,
             )
         except MotionCancelled:
@@ -330,83 +357,93 @@ def run_boxing_skill(cmd: SkillCommand, ctx: MotionContext):
         # ---------------------------------------------------------
         now = time.time()
         if now - last_jab_time >= next_jab_interval:
-            # 1) 카메라 기준으로 타겟 방향(dir_cam)을 따라 JAB_FORWARD_MM 만큼 전진
-            #    (cam → tcp → base 순으로 변환)
-            jab_step_cam = dir_cam * JAB_FORWARD_MM                    # cam 프레임 Δ
-            v_tcp_jab = R_c_g @ jab_step_cam                           # cam → tcp
-            v_base_jab = R_base_tcp @ v_tcp_jab                        # tcp → base
+            # 현재 얼굴 거리 dist_cam 기준으로 안전한 잽 길이 계산
+            # 얼굴에서 SAFE_FACE_MARGIN 만큼은 남겨두기
+            max_allow_jab = max(0.0, dist_cam - SAFE_FACE_MARGIN)
+            jab_len = min(JAB_FORWARD_MM, MAX_JAB_STEP, max_allow_jab)
 
-            jab_xyz = new_xyz + v_base_jab
-
-            if jab_xyz[2] < MIN_Z:
-                jab_xyz[2] = MIN_Z
-
-            target_pos_jab = [
-                float(jab_xyz[0]),
-                float(jab_xyz[1]),
-                float(jab_xyz[2]),
-                float(abc_step[0]),
-                float(abc_step[1]),
-                float(abc_step[2]),
-            ]
-
-            ctx.node.get_logger().info(
-                f"[BOXING] JAB! interval={next_jab_interval:.2f}s, "
-                f"guard={guard_pos[:3]}, jab={target_pos_jab[:3]}"
-            )
-
-            # 2) 잽 자세로 전진
-            try:
-                ctx.motion.movel(
-                    target_pos_jab,
-                    vel=ctx.LIN_VEL,
-                    acc=ctx.LIN_ACC,
-                    mod=DR_MV_MOD_ABS,
+            if jab_len < 1e-3:
+                ctx.node.get_logger().warn(
+                    f"[BOXING] Too close to target (dist={dist_cam:.1f}mm), skip jab."
                 )
-            except MotionCancelled:
-                ctx.node.get_logger().warn("[BOXING] Motion cancelled during jab.")
-                break
-            except Exception as e:
-                ctx.node.get_logger().error(f"[BOXING] Move (jab) failed: {e}")
-                # 잽 실패 시에도 일단 루프 계속
-                time.sleep(0.1)
+            else:
+                # 1) 카메라 기준으로 타겟 방향(dir_cam)을 따라 jab_len 만큼 전진
+                jab_step_cam = dir_cam * jab_len          # cam 프레임 Δ
+                v_tcp_jab = R_c_g @ jab_step_cam          # cam → tcp
+                v_base_jab = R_base_tcp @ v_tcp_jab       # tcp → base
 
-            # 3) 잠깐 유지
-            time.sleep(JAB_HOLD_SEC)
+                jab_xyz = new_xyz + v_base_jab
 
-            # 4) 가드 자세로 복귀 (JAB_BACK_RATIO 비율만큼)
-            if JAB_BACK_RATIO > 0.0:
-                back_xyz = [
-                    guard_pos[0] * JAB_BACK_RATIO + target_pos_jab[0] * (1.0 - JAB_BACK_RATIO),
-                    guard_pos[1] * JAB_BACK_RATIO + target_pos_jab[1] * (1.0 - JAB_BACK_RATIO),
-                    guard_pos[2] * JAB_BACK_RATIO + target_pos_jab[2] * (1.0 - JAB_BACK_RATIO),
+                if jab_xyz[2] < MIN_Z:
+                    jab_xyz[2] = MIN_Z
+
+                target_pos_jab = [
+                    float(jab_xyz[0]),
+                    float(jab_xyz[1]),
+                    float(jab_xyz[2]),
+                    float(abc_step[0]),
+                    float(abc_step[1]),
+                    float(abc_step[2]),
                 ]
 
-                target_pos_back = [
-                    float(back_xyz[0]),
-                    float(back_xyz[1]),
-                    float(back_xyz[2]),
-                    float(guard_pos[3]),
-                    float(guard_pos[4]),
-                    float(guard_pos[5]),
-                ]
+                ctx.node.get_logger().info(
+                    f"[BOXING] 🥊JAB! interval={next_jab_interval:.2f}s, "
+                    f"dist_cam={dist_cam:.1f}mm, jab_len={jab_len:.1f}mm, "
+                    f"guard={guard_pos[:3]}, jab={target_pos_jab[:3]}"
+                )
 
+                # 2) 잽 자세로 전진
                 try:
                     ctx.motion.movel(
-                        target_pos_back,
-                        vel=ctx.LIN_VEL,
-                        acc=ctx.LIN_ACC,
+                        target_pos_jab,
+                        vel=VEL,
+                        acc=ACC,
                         mod=DR_MV_MOD_ABS,
                     )
                 except MotionCancelled:
-                    ctx.node.get_logger().warn("[BOXING] Motion cancelled during back-to-guard.")
+                    ctx.node.get_logger().warn("[BOXING] Motion cancelled during jab.")
                     break
                 except Exception as e:
-                    ctx.node.get_logger().error(f"[BOXING] Move (back to guard) failed: {e}")
+                    ctx.node.get_logger().error(f"[BOXING] Move (jab) failed: {e}")
+                    # 잽 실패 시에도 일단 루프 계속
                     time.sleep(0.1)
 
-                # 실제 guard_pos를 back 위치로 업데이트
-                guard_pos = target_pos_back.copy()
+                # 3) 잠깐 유지
+                time.sleep(JAB_HOLD_SEC)
+
+                # 4) 가드 자세로 복귀 (JAB_BACK_RATIO 비율만큼)
+                if JAB_BACK_RATIO > 0.0:
+                    back_xyz = [
+                        guard_pos[0] * JAB_BACK_RATIO + target_pos_jab[0] * (1.0 - JAB_BACK_RATIO),
+                        guard_pos[1] * JAB_BACK_RATIO + target_pos_jab[1] * (1.0 - JAB_BACK_RATIO),
+                        guard_pos[2] * JAB_BACK_RATIO + target_pos_jab[2] * (1.0 - JAB_BACK_RATIO),
+                    ]
+
+                    target_pos_back = [
+                        float(back_xyz[0]),
+                        float(back_xyz[1]),
+                        float(back_xyz[2]),
+                        float(guard_pos[3]),
+                        float(guard_pos[4]),
+                        float(guard_pos[5]),
+                    ]
+
+                    try:
+                        ctx.motion.movel(
+                            target_pos_back,
+                            vel=VEL,
+                            acc=ACC,
+                            mod=DR_MV_MOD_ABS,
+                        )
+                    except MotionCancelled:
+                        ctx.node.get_logger().warn("[BOXING] Motion cancelled during back-to-guard.")
+                        break
+                    except Exception as e:
+                        ctx.node.get_logger().error(f"[BOXING] Move (back to guard) failed: {e}")
+                        time.sleep(0.1)
+
+                    # 실제 guard_pos를 back 위치로 업데이트
+                    guard_pos = target_pos_back.copy()
 
             # 잽 타이머 리셋
             last_jab_time = time.time()
