@@ -214,6 +214,7 @@ ROBOT_WAKEUP
   - "Turn on DUM-E"
   - "로봇 켜"
   - "더미 깨워줘"
+  - "Wake up, daddy's home"
 
 
 HOME
