@@ -407,6 +407,40 @@ DUMP
   - "구겨진 휴지 버려줘."
   - "버릴 것들 좀 버려줘."
 
+
+BOXING
+- Purpose: Playful "sparring" mode — track the user's face and periodically extend the arm forward
+  as if throwing light jabs, while returning to a guard-like pose.
+- Moves arm: Yes (continuous tracking + periodic jabs).
+- Typical intent:
+  - User wants to "spar", "box", or "fight" with the robot in a playful way.
+  - Korean phrases indicating playful fighting/sparring MUST be treated as a BOXING command,
+    not as casual chat, when they are clearly addressed to the robot.
+- Trigger rules:
+  - If the user uses phrases like:
+    - Korean: "스파링 하자", "복싱 하자", "맞짱 뜨자", "싸우자", "한판 뜨자",
+              "나랑 스파링", "더미랑 복싱하자"
+    - English: "let's spar", "let's box", "fight me", "let's fight", "boxing mode"
+  - and the context indicates a playful interaction with the robot:
+    → intent MUST be "command"
+    → plan MUST use BOXING as the primary skill.
+- Object rules:
+  - The target is the human's face/person being tracked.
+  - In most cases:
+    - object.raw = original user phrase (e.g., "스파링 하자", "let's spar").
+    - object.canonical_en = "face" or "person" (prefer "face" when face tracking is available).
+- Params:
+  - {} (or planner may leave params empty; low-level code controls timing and motion).
+- Examples:
+  - "스파링 한 번 하자."
+  - "복싱하자 더미야."
+  - "맞짱 뜨자."
+  - "싸우자."
+  - "한판 뜨자."
+  - "Jarvis, let's spar."
+  - "Go into boxing mode."
+
+
 ────────────────────────────────────────
 HANDOVER VS PLACEMP DECISION RULES (CRITICAL)
 ────────────────────────────────────────
