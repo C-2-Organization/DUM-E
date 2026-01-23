@@ -10,7 +10,10 @@ setup(
         ("share/ament_index/resource_index/packages",
          ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/launch", ["launch/dum_e_bringup.launch.py"]),
+        ("share/" + package_name + "/launch", [
+            "launch/dum_e_bringup.launch.py",
+            "launch/robot_state_care.launch.py",
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +28,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'robot_state_care_node = dum_e_bringup.robot_state_care_node:main',
         ],
     },
 )
